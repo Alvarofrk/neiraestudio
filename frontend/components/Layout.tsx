@@ -1,17 +1,16 @@
 
 import React from 'react';
-import { ViewState } from '../types';
-import * as storage from '../services/storageService';
+import { ViewState, User } from '../types';
 
 interface LayoutProps {
   children: React.ReactNode;
   currentView: ViewState;
   onViewChange: (view: ViewState) => void;
   onLogout: () => void;
+  currentUser: User | null;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, onLogout }) => {
-  const currentUser = storage.getCurrentUser();
+const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, onLogout, currentUser }) => {
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -48,7 +47,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
             <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
             Nueva Carátula
           </button>
-          {currentUser?.isAdmin && (
+          {(currentUser?.isAdmin || currentUser?.is_admin) && (
             <button 
               onClick={() => onViewChange('users')}
               className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${currentView === 'users' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'}`}

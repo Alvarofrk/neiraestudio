@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import * as storage from '../services/storageService';
+import * as api from '../services/apiService';
 import { User } from '../types';
 
 interface LoginProps {
@@ -11,14 +11,21 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const user = storage.login(username, password);
-    if (user) {
+    setError('');
+    setLoading(true);
+    
+    try {
+      const user = await api.apiLogin(username, password);
+      console.log('Login exitoso, usuario:', user);
       onLogin(user);
-    } else {
-      setError('Credenciales incorrectas');
+    } catch (err: any) {
+      console.error('Error en login:', err);
+      setError(err.message || 'Credenciales incorrectas');
+      setLoading(false);
     }
   };
 
@@ -75,8 +82,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               {error}
             </div>
           )}
-          <button type="submit" className="w-full bg-black text-white py-5 rounded-2xl font-black uppercase tracking-[0.2em] text-[10px] shadow-2xl hover:bg-orange-600 transition-all transform active:scale-95 shadow-orange-900/10">
-            Ingresar al Expediente
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full bg-black text-white py-5 rounded-2xl font-black uppercase tracking-[0.2em] text-[10px] shadow-2xl hover:bg-orange-600 transition-all transform active:scale-95 shadow-orange-900/10 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Ingresando...' : 'Ingresar al Expediente'}
           </button>
         </form>
         

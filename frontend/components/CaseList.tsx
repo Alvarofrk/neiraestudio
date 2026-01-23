@@ -11,6 +11,9 @@ interface CaseListProps {
 const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  
+  // Asegurar que cases sea un array
+  const casesArray = Array.isArray(cases) ? cases : [];
 
   // Lógica de pesos para ordenamiento
   const statusWeight = {
@@ -34,7 +37,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange }
 
   const exportToExcel = () => {
     const headers = ["Codigo Interno", "Caratula", "Nro Expediente", "Juzgado", "Fuero", "Estado", "Cliente", "Contraparte", "Abogado Responsable"];
-    const rows = cases.map(c => [
+    const rows = casesArray.map(c => [
       c.codigo_interno,
       c.caratula,
       c.nro_expediente,

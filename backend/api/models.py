@@ -1,0 +1,133 @@
+from django.db import models
+from django.contrib.auth.models import AbstractUser
+from django.utils import timezone
+
+
+class User(AbstractUser):
+    """Usuario personalizado con campo is_admin"""
+    is_admin = models.BooleanField(default=False, verbose_name='Es Administrador')
+    
+    class Meta:
+        verbose_name = 'Usuario'
+        verbose_name_plural = 'Usuarios'
+        ordering = ['username']
+    
+    def __str__(self):
+        return self.username
+
+
+class LawCase(models.Model):
+    """Modelo principal para expedientes legales"""
+    
+    class CaseStatus(models.TextChoices):
+        OPEN = 'Abierto', 'Abierto'
+        IN_PROGRESS = 'En Trámite', 'En Trámite'
+        PAUSED = 'Pausado', 'Pausado'
+        CLOSED = 'Cerrado', 'Cerrado'
+    
+    # Campos principales
+    codigo_interno = models.CharField(max_length=50, unique=True, verbose_name='Código Interno')
+    caratula = models.CharField(max_length=500, verbose_name='Carátula')
+    nro_expediente = models.CharField(max_length=100, verbose_name='Número de Expediente')
+    juzgado = models.CharField(max_length=200, blank=True, verbose_name='Juzgado')
+    fuero = models.CharField(max_length=50, default='Civil', verbose_name='Fuero')
+    estado = models.CharField(max_length=20, choices=CaseStatus.choices, default=CaseStatus.OPEN, verbose_name='Estado')
+    
+    # Información de partes
+    abogado_responsable = models.CharField(max_length=200, blank=True, verbose_name='Abogado Responsable')
+    cliente_nombre = models.CharField(max_length=200, blank=True, verbose_name='Cliente')
+    cliente_dni = models.CharField(max_length=20, blank=True, verbose_name='DNI/RUC Cliente')
+    contraparte = models.CharField(max_length=200, blank=True, verbose_name='Contraparte')
+    
+    # Fechas y auditoría
+    fecha_inicio = models.DateField(default=timezone.now, verbose_name='Fecha de Inicio')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Última Modificación')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='cases_created', verbose_name='Creado por')
+    last_modified_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='cases_modified', verbose_name='Modificado por')
+    
+    class Meta:
+        verbose_name = 'Expediente'
+        verbose_name_plural = 'Expedientes'
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['codigo_interno']),
+            models.Index(fields=['estado']),
+            models.Index(fields=['-updated_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.codigo_interno} - {self.caratula}"
+
+
+class CaseActuacion(models.Model):
+    """Actuaciones o eventos del expediente"""
+    
+    caso = models.ForeignKey(LawCase, on_delete=models.CASCADE, related_name='actuaciones', verbose_name='Expediente')
+    fecha = models.DateField(default=timezone.now, verbose_name='Fecha')
+    descripcion = models.TextField(verbose_name='Descripción')
+    tipo = models.CharField(max_length=100, default='Escrito', verbose_name='Tipo')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='actuaciones_created', verbose_name='Creado por')
+    
+    class Meta:
+        verbose_name = 'Actuación'
+        verbose_name_plural = 'Actuaciones'
+        ordering = ['-fecha', '-created_at']
+    
+    def __str__(self):
+        return f"{self.tipo} - {self.caso.codigo_interno}"
+
+
+class CaseAlerta(models.Model):
+    """Alertas y plazos del expediente"""
+    
+    class CasePriority(models.TextChoices):
+        ALTA = 'Alta', 'Alta'
+        MEDIA = 'Media', 'Media'
+        BAJA = 'Baja', 'Baja'
+    
+    caso = models.ForeignKey(LawCase, on_delete=models.CASCADE, related_name='alertas', verbose_name='Expediente')
+    titulo = models.CharField(max_length=200, verbose_name='Título')
+    resumen = models.TextField(blank=True, verbose_name='Resumen')
+    hora = models.TimeField(null=True, blank=True, verbose_name='Hora')
+    fecha_vencimiento = models.DateField(verbose_name='Fecha de Vencimiento')
+    cumplida = models.BooleanField(default=False, verbose_name='Cumplida')
+    prioridad = models.CharField(max_length=10, choices=CasePriority.choices, default=CasePriority.MEDIA, verbose_name='Prioridad')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='alertas_created', verbose_name='Creado por')
+    completed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='alertas_completed', verbose_name='Completada por')
+    completed_at = models.DateTimeField(null=True, blank=True, verbose_name='Fecha de Cumplimiento')
+    
+    class Meta:
+        verbose_name = 'Alerta'
+        verbose_name_plural = 'Alertas'
+        ordering = ['fecha_vencimiento', 'prioridad']
+    
+    def __str__(self):
+        return f"{self.titulo} - {self.caso.codigo_interno}"
+
+
+class CaseNote(models.Model):
+    """Notas estratégicas del expediente (Biblioteca)"""
+    
+    class NoteLabel(models.TextChoices):
+        ESTRATEGIA = 'Estrategia', 'Estrategia'
+        DOCUMENTACION = 'Documentación', 'Documentación'
+        INVESTIGACION = 'Investigación', 'Investigación'
+        JURISPRUDENCIA = 'Jurisprudencia', 'Jurisprudencia'
+    
+    caso = models.ForeignKey(LawCase, on_delete=models.CASCADE, related_name='notas', verbose_name='Expediente')
+    titulo = models.CharField(max_length=200, verbose_name='Título')
+    contenido = models.TextField(verbose_name='Contenido')
+    etiqueta = models.CharField(max_length=50, choices=NoteLabel.choices, default=NoteLabel.ESTRATEGIA, verbose_name='Etiqueta')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='notas_created', verbose_name='Creado por')
+    
+    class Meta:
+        verbose_name = 'Nota'
+        verbose_name_plural = 'Notas'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.titulo} - {self.caso.codigo_interno}"

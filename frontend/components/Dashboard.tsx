@@ -1,7 +1,7 @@
 
-import React from 'react';
-import { LawCase, CaseStatus, CasePriority, ViewState } from '../types';
-import * as storage from '../services/storageService';
+import React, { useState, useEffect } from 'react';
+import { LawCase, CaseStatus, CasePriority, ViewState, User } from '../types';
+import * as api from '../services/apiService';
 
 interface DashboardProps {
   cases: LawCase[];
@@ -12,7 +12,18 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase, onUpdateCase }) => {
   const now = new Date();
-  const currentUser = storage.getCurrentUser();
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  // Asegurar que cases sea un array
+  const casesArray = Array.isArray(cases) ? cases : [];
+
+  useEffect(() => {
+    const loadUser = async () => {
+      const user = await api.apiGetCurrentUser();
+      setCurrentUser(user);
+    };
+    loadUser();
+  }, []);
 
   const calculateUrgency = (fechaVencimiento: string) => {
     const target = new Date(fechaVencimiento);
@@ -25,24 +36,23 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
     return { label: 'Pendiente', text: 'text-slate-500' };
   };
 
-  const handleToggleAlerta = (e: React.MouseEvent, lawCase: LawCase, alertaId: string) => {
+  const handleToggleAlerta = async (e: React.MouseEvent, lawCase: LawCase, alertaId: string) => {
     e.stopPropagation();
-    const updatedAlerts = lawCase.alertas.map(a => {
-      if (a.id === alertaId) {
-        const nextState = !a.cumplida;
-        return { 
-          ...a, 
-          cumplida: nextState,
-          completedBy: nextState ? (currentUser?.username || 'sistema') : undefined
-        };
-      }
-      return a;
-    });
-    onUpdateCase({ ...lawCase, alertas: updatedAlerts });
+    try {
+      const updatedAlerta = await api.apiToggleAlerta(String(alertaId));
+      // Actualizar el caso con la alerta actualizada
+      const updatedAlerts = (lawCase.alertas || []).map(a => 
+        String(a.id) === String(alertaId) ? updatedAlerta : a
+      );
+      onUpdateCase({ ...lawCase, alertas: updatedAlerts });
+    } catch (error) {
+      console.error('Error al actualizar alerta:', error);
+      alert('Error al actualizar la alerta. Por favor, intenta nuevamente.');
+    }
   };
 
-  const allAlerts = cases.flatMap(c => 
-    c.alertas.map(a => ({ ...a, caratula: c.caratula, caseObj: c }))
+  const allAlerts = casesArray.flatMap(c => 
+    (c.alertas || []).map(a => ({ ...a, caratula: c.caratula, caseObj: c }))
   );
   
   const sortedAlerts = allAlerts.sort((a, b) => {
@@ -50,7 +60,11 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
     return new Date(a.fecha_vencimiento).getTime() - new Date(b.fecha_vencimiento).getTime();
   });
   
-  const recentCases = [...cases].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 5);
+  const recentCases = [...casesArray].sort((a, b) => {
+    const dateA = new Date(b.updated_at || b.updatedAt || '').getTime();
+    const dateB = new Date(a.updated_at || a.updatedAt || '').getTime();
+    return dateA - dateB;
+  }).slice(0, 5);
 
   return (
     <div className="space-y-8 animate-fadeIn">
@@ -84,7 +98,7 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col h-[70vh]">
             <h3 className="text-[11px] font-black text-slate-900 uppercase tracking-[0.2em] mb-8 flex items-center justify-between sticky top-0 bg-white pb-2 z-10 border-b border-slate-50">
               Control de Plazos
-              <span className="bg-orange-100 text-orange-600 px-3 py-1 rounded-lg text-[9px]">{allAlerts.filter(a=>!a.cumplida).length} Pendientes</span>
+              <span className="bg-orange-100 text-orange-600 px-3 py-1 rounded-lg text-[9px]">{sortedAlerts.filter(a=>!a.cumplida).length} Pendientes</span>
             </h3>
             <div className="space-y-4 overflow-y-auto custom-scrollbar pr-3">
               {sortedAlerts.map(alerta => {
@@ -155,7 +169,7 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
                     <td className="px-8 py-6">
                        <div className="flex items-center gap-2">
                           <div className="w-6 h-6 rounded-lg bg-zinc-950 flex items-center justify-center text-[8px] text-orange-500 font-black">@</div>
-                          <span className="text-[10px] font-black text-slate-600 uppercase tracking-tighter">{c.lastModifiedBy || 'sistema'}</span>
+                          <span className="text-[10px] font-black text-slate-600 uppercase tracking-tighter">{c.last_modified_by_username || c.lastModifiedBy || 'sistema'}</span>
                        </div>
                     </td>
                     <td className="px-8 py-6">

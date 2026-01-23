@@ -23,20 +23,22 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel }) => {
     contraparte: ''
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.caratula || !formData.nro_expediente) {
       alert("La Carátula y el Nro. de Expediente son campos obligatorios.");
       return;
     }
 
-    // Fix: Instead of building a full LawCase which is missing internal fields like 'codigo_interno',
-    // we send exactly the data required by the storage.addCase method.
-    const newCaseData: NewCaseInput = {
-      ...formData,
-      fecha_inicio: new Date().toISOString()
-    };
-    onAdd(newCaseData);
+    try {
+      const newCaseData: NewCaseInput = {
+        ...formData,
+        fecha_inicio: new Date().toISOString().split('T')[0] // Formato YYYY-MM-DD
+      };
+      await onAdd(newCaseData);
+    } catch (error) {
+      console.error('Error al crear caso:', error);
+    }
   };
 
   return (

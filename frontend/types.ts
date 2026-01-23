@@ -13,42 +13,58 @@ export enum CasePriority {
 }
 
 export interface User {
-  id: string;
+  id: string | number;
   username: string;
   password?: string;
-  isAdmin: boolean;
+  isAdmin?: boolean;
+  is_admin?: boolean; // Compatibilidad con backend
 }
 
 export interface CaseNote {
   id: string;
-  caso_id: string;
+  caso_id?: string;
+  caso?: string;
   titulo: string;
   contenido: string;
   etiqueta: string;
-  fecha_creacion: string;
-  createdBy: string; // ID del usuario
+  fecha_creacion?: string;
+  created_at?: string;
+  createdBy?: string;
+  created_by?: string;
+  created_by_username?: string;
 }
 
 export interface CaseActuacion {
   id: string;
-  caso_id: string;
+  caso_id?: string;
+  caso?: string;
   fecha: string;
   descripcion: string;
   tipo: string;
-  createdBy: string; // ID del usuario
+  createdBy?: string;
+  created_by?: string;
+  created_by_username?: string;
+  created_at?: string;
 }
 
 export interface CaseAlerta {
   id: string;
-  caso_id: string;
+  caso_id?: string;
+  caso?: string;
   titulo: string;
   resumen: string;
-  hora: string;
+  hora?: string | null;
   fecha_vencimiento: string;
   cumplida: boolean;
   prioridad: CasePriority;
-  createdBy: string;
-  completedBy?: string; // Nuevo: Usuario que marcó como cumplida
+  createdBy?: string;
+  created_by?: string;
+  created_by_username?: string;
+  completedBy?: string;
+  completed_by?: string;
+  completed_by_username?: string;
+  completed_at?: string | null;
+  created_at?: string;
 }
 
 export interface LawCase {
@@ -64,12 +80,18 @@ export interface LawCase {
   cliente_dni: string;
   contraparte: string;
   fecha_inicio: string;
-  updatedAt: string;
-  createdBy: string;      // Usuario que creó el caso
-  lastModifiedBy: string; // Último usuario que modificó
-  actuaciones: CaseActuacion[];
-  alertas: CaseAlerta[];
-  notas: CaseNote[];
+  updatedAt?: string;
+  updated_at?: string;
+  createdBy?: string;
+  created_by?: string;
+  created_by_username?: string;
+  lastModifiedBy?: string;
+  last_modified_by?: string;
+  last_modified_by_username?: string;
+  created_at?: string;
+  actuaciones?: CaseActuacion[];
+  alertas?: CaseAlerta[];
+  notas?: CaseNote[];
 }
 
 export type ViewState = 'dashboard' | 'cases' | 'new-case' | 'case-detail' | 'users';
