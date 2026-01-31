@@ -1,6 +1,8 @@
 import { LawCase, User, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, DashboardStats } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+// Normalizar para evitar dobles slashes (ej: /api//auth/login/)
+const RAW_API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const API_BASE_URL = String(RAW_API_BASE_URL).replace(/\/+$/, '');
 
 // Utilidades para manejar tokens JWT
 const getToken = (): string | null => {
