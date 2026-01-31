@@ -71,6 +71,28 @@ class CaseAlertaSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'created_by', 'completed_at', 'completed_by']
 
 
+class DashboardAlertaSerializer(serializers.ModelSerializer):
+    """
+    Serializer de alertas para dashboard.
+    Incluye datos mínimos del expediente para navegación (case_id / caratula).
+    """
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    completed_by_username = serializers.CharField(source='completed_by.username', read_only=True)
+    case_id = serializers.IntegerField(source='caso_id', read_only=True)
+    caratula = serializers.CharField(source='caso.caratula', read_only=True)
+    codigo_interno = serializers.CharField(source='caso.codigo_interno', read_only=True)
+
+    class Meta:
+        model = CaseAlerta
+        fields = [
+            'id', 'caso', 'case_id', 'codigo_interno', 'caratula',
+            'titulo', 'resumen', 'hora', 'fecha_vencimiento',
+            'cumplida', 'prioridad', 'created_at', 'created_by', 'created_by_username',
+            'completed_by', 'completed_by_username', 'completed_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'created_by', 'completed_at', 'completed_by', 'case_id', 'caratula', 'codigo_interno']
+
+
 class CaseNoteSerializer(serializers.ModelSerializer):
     """Serializer para notas"""
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)

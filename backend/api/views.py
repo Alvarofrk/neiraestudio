@@ -12,7 +12,7 @@ from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente,
 from .serializers import (
     UserSerializer, UserCreateSerializer, LoginSerializer,
     LawCaseSerializer, LawCaseListSerializer,
-    CaseActuacionSerializer, CaseAlertaSerializer, CaseNoteSerializer,
+    CaseActuacionSerializer, CaseAlertaSerializer, CaseNoteSerializer, DashboardAlertaSerializer,
     ClienteSerializer, CaseTagSerializer, ActuacionTemplateSerializer
 )
 
@@ -409,54 +409,86 @@ class DashboardView(APIView):
     
     def get(self, request):
         """Obtener estadísticas y alertas para dashboard"""
-        cases = LawCase.objects.all()
-        
-        # Estadísticas básicas
-        stats = {
-            'total_cases': cases.count(),
-            'open_cases': cases.filter(estado=LawCase.CaseStatus.OPEN).count(),
-            'in_progress_cases': cases.filter(estado=LawCase.CaseStatus.IN_PROGRESS).count(),
-            'paused_cases': cases.filter(estado=LawCase.CaseStatus.PAUSED).count(),
-            'closed_cases': cases.filter(estado=LawCase.CaseStatus.CLOSED).count(),
-        }
-        
-        # Estadísticas por fuero
-        stats_by_fuero = {}
-        for fuero in ['Civil', 'Comercial', 'Penal', 'Laboral', 'Familia']:
-            stats_by_fuero[fuero] = cases.filter(fuero=fuero).count()
-        
-        # Estadísticas por abogado
-        abogados = cases.exclude(abogado_responsable='').values_list('abogado_responsable', flat=True).distinct()
-        stats_by_abogado = {}
-        for abogado in abogados:
-            stats_by_abogado[abogado] = cases.filter(abogado_responsable=abogado).count()
-        
-        # Casos por mes (últimos 12 meses)
         from django.db.models import Count
+        from django.db.models.functions import TruncMonth
         from django.utils import timezone
-        from datetime import timedelta
-        cases_by_month = []
-        for i in range(12):
-            month_start = timezone.now().replace(day=1) - timedelta(days=30*i)
-            month_end = month_start + timedelta(days=30)
-            count = cases.filter(created_at__gte=month_start, created_at__lt=month_end).count()
-            cases_by_month.append({
-                'mes': month_start.strftime('%Y-%m'),
-                'total': count
-            })
-        cases_by_month.reverse()
-        
-        # Obtener todas las alertas
-        all_alertas = CaseAlerta.objects.select_related('caso', 'created_by', 'completed_by').all()
-        
-        # Últimos casos actualizados
-        recent_cases = LawCase.objects.select_related('created_by', 'last_modified_by', 'cliente').prefetch_related('etiquetas').order_by('-updated_at')[:5]
-        
+
+        cases = LawCase.objects.all()
+
+        # ---- Estadísticas básicas (1 query) ----
+        status_counts = dict(
+            cases.values('estado')
+            .annotate(total=Count('id'))
+            .values_list('estado', 'total')
+        )
+
+        total_cases = sum(status_counts.values()) if status_counts else cases.count()
+        stats = {
+            'total_cases': total_cases,
+            'open_cases': status_counts.get(LawCase.CaseStatus.OPEN, 0),
+            'in_progress_cases': status_counts.get(LawCase.CaseStatus.IN_PROGRESS, 0),
+            'paused_cases': status_counts.get(LawCase.CaseStatus.PAUSED, 0),
+            'closed_cases': status_counts.get(LawCase.CaseStatus.CLOSED, 0),
+        }
+
+        # ---- Estadísticas por fuero (1 query) ----
+        fuero_counts = dict(
+            cases.values('fuero')
+            .annotate(total=Count('id'))
+            .values_list('fuero', 'total')
+        )
+        fuero_order = ['Civil', 'Comercial', 'Penal', 'Laboral', 'Familia']
+        stats_by_fuero = {fuero: int(fuero_counts.get(fuero, 0)) for fuero in fuero_order}
+
+        # ---- Estadísticas por abogado (1 query) ----
+        stats_by_abogado = {
+            row['abogado_responsable']: int(row['total'])
+            for row in cases.exclude(abogado_responsable='')
+            .values('abogado_responsable')
+            .annotate(total=Count('id'))
+        }
+
+        # ---- Casos por mes (últimos 12 meses) (1 query) ----
+        def month_shift(dt, delta_months: int):
+            year = dt.year + (dt.month - 1 + delta_months) // 12
+            month = (dt.month - 1 + delta_months) % 12 + 1
+            return dt.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        now = timezone.now()
+        month0 = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        start_12m = month_shift(month0, -11)
+
+        month_rows = (
+            cases.filter(created_at__gte=start_12m)
+            .annotate(mes=TruncMonth('created_at'))
+            .values('mes')
+            .annotate(total=Count('id'))
+            .order_by('mes')
+        )
+        month_map = {row['mes'].strftime('%Y-%m'): int(row['total']) for row in month_rows if row['mes']}
+        cases_by_month = [
+            {'mes': month_shift(month0, -i).strftime('%Y-%m'), 'total': month_map.get(month_shift(month0, -i).strftime('%Y-%m'), 0)}
+            for i in range(11, -1, -1)
+        ]
+
+        # ---- Alertas (limitadas) ----
+        alertas_qs = (
+            CaseAlerta.objects.select_related('caso', 'created_by', 'completed_by')
+            .order_by('cumplida', 'fecha_vencimiento')
+        )[:200]
+
+        # ---- Últimos casos actualizados ----
+        recent_cases = (
+            LawCase.objects.select_related('created_by', 'last_modified_by', 'cliente')
+            .prefetch_related('etiquetas')
+            .order_by('-updated_at')[:5]
+        )
+
         return Response({
             'stats': stats,
             'stats_by_fuero': stats_by_fuero,
             'stats_by_abogado': stats_by_abogado,
             'cases_by_month': cases_by_month,
             'recent_cases': LawCaseListSerializer(recent_cases, many=True).data,
-            'alertas': CaseAlertaSerializer(all_alertas, many=True).data
+            'alertas': DashboardAlertaSerializer(alertas_qs, many=True).data
         })

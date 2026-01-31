@@ -43,6 +43,8 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     # Servir staticfiles en producción (Render) sin nginx
     'whitenoise.middleware.WhiteNoiseMiddleware',
+    # Comprimir JSON/HTML para mejorar performance
+    'django.middleware.gzip.GZipMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -84,6 +86,7 @@ DB_PASSWORD = config('DB_PASSWORD', default='')
 DB_HOST = config('DB_HOST', default='')
 DB_PORT = config('DB_PORT', default='')
 DB_SSLMODE = config('DB_SSLMODE', default='')
+DB_CONN_MAX_AGE = config('DB_CONN_MAX_AGE', default=60, cast=int)
 
 DATABASES = {
     'default': {
@@ -93,6 +96,7 @@ DATABASES = {
         'PASSWORD': DB_PASSWORD,
         'HOST': DB_HOST,
         'PORT': DB_PORT,
+        'CONN_MAX_AGE': DB_CONN_MAX_AGE,
     }
 }
 

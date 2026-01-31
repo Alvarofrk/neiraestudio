@@ -282,15 +282,16 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
             <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">Usuarios Registrados</h3>
             <p className="text-[10px] text-slate-400 mt-1">Total: {users.length} usuario{users.length !== 1 ? 's' : ''}</p>
           </div>
-          <table className="w-full text-left">
-            <thead className="bg-zinc-900 text-white">
-              <tr className="text-[10px] font-black uppercase tracking-widest">
-                <th className="px-6 py-4">Usuario</th>
-                <th className="px-6 py-4">Rol</th>
-                <th className="px-6 py-4 text-right">Acción</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full min-w-[720px] text-left">
+              <thead className="bg-zinc-900 text-white">
+                <tr className="text-[10px] font-black uppercase tracking-widest">
+                  <th className="px-6 py-4">Usuario</th>
+                  <th className="px-6 py-4">Rol</th>
+                  <th className="px-6 py-4 text-right">Acción</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
               {users.length === 0 ? (
                 <tr>
                   <td colSpan={3} className="px-6 py-12 text-center">
@@ -356,8 +357,9 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
                   );
                 })
               )}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

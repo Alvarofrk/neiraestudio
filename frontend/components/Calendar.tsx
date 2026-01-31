@@ -229,91 +229,95 @@ const Calendar: React.FC<CalendarProps> = ({ cases, onSelectCase, onViewChange }
             </svg>
           </button>
         </div>
-
-        {/* Días de la semana */}
-        <div className="grid grid-cols-7 border-b border-slate-200">
-          {dayNames.map(day => (
-            <div key={day} className="p-4 text-center bg-slate-50 border-r border-slate-200 last:border-r-0">
-              <span className="text-xs font-black text-slate-600 uppercase tracking-widest">{day}</span>
+        {/* Scroll horizontal en pantallas pequeñas */}
+        <div className="overflow-x-auto custom-scrollbar">
+          <div className="min-w-[840px]">
+            {/* Días de la semana */}
+            <div className="grid grid-cols-7 border-b border-slate-200">
+              {dayNames.map(day => (
+                <div key={day} className="p-4 text-center bg-slate-50 border-r border-slate-200 last:border-r-0">
+                  <span className="text-xs font-black text-slate-600 uppercase tracking-widest">{day}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        {/* Días del mes */}
-        <div className="grid grid-cols-7">
-          {days.map((day, index) => {
-            const events = getEventsForDate(day.date);
-            const hasAlerts = events.alerts.length > 0;
-            const hasActuaciones = events.actuaciones.length > 0;
-            const isCurrentDay = isToday(day.date);
-            const isSelectedDay = isSelected(day.date);
+            {/* Días del mes */}
+            <div className="grid grid-cols-7">
+              {days.map((day, index) => {
+                const events = getEventsForDate(day.date);
+                const hasAlerts = events.alerts.length > 0;
+                const hasActuaciones = events.actuaciones.length > 0;
+                const isCurrentDay = isToday(day.date);
+                const isSelectedDay = isSelected(day.date);
 
-            return (
-              <div
-                key={index}
-                onClick={() => setSelectedDate(day.date)}
-                className={`
-                  min-h-[100px] p-2 border-r border-b border-slate-200 cursor-pointer transition-all
-                  ${!day.isCurrentMonth ? 'bg-slate-50 text-slate-400' : 'bg-white hover:bg-slate-50'}
-                  ${isCurrentDay ? 'ring-2 ring-orange-500' : ''}
-                  ${isSelectedDay ? 'bg-orange-50' : ''}
-                `}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs font-bold ${isCurrentDay ? 'bg-orange-500 text-white px-2 py-0.5 rounded' : ''}`}>
-                    {day.date.getDate()}
-                  </span>
-                  {(hasAlerts || hasActuaciones) && (
-                    <div className="flex gap-1">
-                      {hasAlerts && (
-                        <div className="flex gap-0.5">
-                          {events.alerts.slice(0, 3).map((alerta, idx) => (
-                            <div
-                              key={alerta.id || idx}
-                              className={`w-1.5 h-1.5 rounded-full ${alerta.cumplida ? 'bg-slate-300' : getUrgencyColor(alerta.fecha_vencimiento)}`}
-                              title={alerta.titulo || 'Alerta'}
-                            />
-                          ))}
-                          {events.alerts.length > 3 && (
-                            <span className="text-[8px] font-black text-slate-400">+{events.alerts.length - 3}</span>
+                return (
+                  <div
+                    key={index}
+                    onClick={() => setSelectedDate(day.date)}
+                    className={`
+                      min-h-[80px] sm:min-h-[100px] p-2 border-r border-b border-slate-200 cursor-pointer transition-all
+                      ${!day.isCurrentMonth ? 'bg-slate-50 text-slate-400' : 'bg-white hover:bg-slate-50'}
+                      ${isCurrentDay ? 'ring-2 ring-orange-500' : ''}
+                      ${isSelectedDay ? 'bg-orange-50' : ''}
+                    `}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-xs font-bold ${isCurrentDay ? 'bg-orange-500 text-white px-2 py-0.5 rounded' : ''}`}>
+                        {day.date.getDate()}
+                      </span>
+                      {(hasAlerts || hasActuaciones) && (
+                        <div className="flex gap-1">
+                          {hasAlerts && (
+                            <div className="flex gap-0.5">
+                              {events.alerts.slice(0, 3).map((alerta, idx) => (
+                                <div
+                                  key={alerta.id || idx}
+                                  className={`w-1.5 h-1.5 rounded-full ${alerta.cumplida ? 'bg-slate-300' : getUrgencyColor(alerta.fecha_vencimiento)}`}
+                                  title={alerta.titulo || 'Alerta'}
+                                />
+                              ))}
+                              {events.alerts.length > 3 && (
+                                <span className="text-[8px] font-black text-slate-400">+{events.alerts.length - 3}</span>
+                              )}
+                            </div>
+                          )}
+                          {hasActuaciones && (
+                            <div className="w-1.5 h-1.5 rounded-full bg-blue-500" title={`${events.actuaciones.length} actuación(es)`} />
                           )}
                         </div>
                       )}
-                      {hasActuaciones && (
-                        <div className="w-1.5 h-1.5 rounded-full bg-blue-500" title={`${events.actuaciones.length} actuación(es)`} />
-                      )}
                     </div>
-                  )}
-                </div>
-                
-                {/* Eventos del día (solo mostrar algunos) */}
-                {isSelectedDay && (hasAlerts || hasActuaciones) && (
-                  <div className="mt-2 space-y-1">
-                    {events.alerts.slice(0, 2).map(alerta => (
-                      <div
-                        key={alerta.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (alerta.caseObj && alerta.caseObj.id) {
-                            onSelectCase(alerta.caseObj);
-                          }
-                        }}
-                        className={`text-[9px] p-1 rounded ${alerta.cumplida ? 'bg-slate-100 text-slate-500' : 'bg-red-50 text-red-700'} font-bold truncate cursor-pointer hover:opacity-80`}
-                        title={alerta.titulo || 'Sin título'}
-                      >
-                        {alerta.titulo || 'Sin título'}
-                      </div>
-                    ))}
-                    {events.alerts.length > 2 && (
-                      <div className="text-[8px] text-slate-400 font-bold">
-                        +{events.alerts.length - 2} más
+                    
+                    {/* Eventos del día (solo mostrar algunos) */}
+                    {isSelectedDay && (hasAlerts || hasActuaciones) && (
+                      <div className="mt-2 space-y-1">
+                        {events.alerts.slice(0, 2).map(alerta => (
+                          <div
+                            key={alerta.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (alerta.caseObj && alerta.caseObj.id) {
+                                onSelectCase(alerta.caseObj);
+                              }
+                            }}
+                            className={`text-[9px] p-1 rounded ${alerta.cumplida ? 'bg-slate-100 text-slate-500' : 'bg-red-50 text-red-700'} font-bold truncate cursor-pointer hover:opacity-80`}
+                            title={alerta.titulo || 'Sin título'}
+                          >
+                            {alerta.titulo || 'Sin título'}
+                          </div>
+                        ))}
+                        {events.alerts.length > 2 && (
+                          <div className="text-[8px] text-slate-400 font-bold">
+                            +{events.alerts.length - 2} más
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
 

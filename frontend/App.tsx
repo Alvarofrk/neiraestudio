@@ -32,7 +32,10 @@ const App: React.FC = () => {
         const user = await api.apiGetCurrentUser();
         setCurrentUser(user);
         if (user) {
-          await loadCases();
+          // No bloquear la UI por la carga de expedientes
+          loadCases().catch((error) => {
+            console.error('Error al cargar casos al iniciar:', error);
+          });
         }
       } catch (error) {
         console.error('Error al verificar usuario:', error);
@@ -62,7 +65,10 @@ const App: React.FC = () => {
     setCurrentUser(user);
     setCurrentView('dashboard');
     try {
-      await loadCases();
+      // Cargar expedientes en segundo plano para mejorar UX
+      loadCases().catch((error) => {
+        console.error('Error al cargar casos después del login:', error);
+      });
     } catch (error) {
       console.error('Error al cargar casos después del login:', error);
     }

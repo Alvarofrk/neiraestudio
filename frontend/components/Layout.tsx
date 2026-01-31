@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { ViewState, User } from '../types';
 
 interface LayoutProps {
@@ -11,6 +11,20 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, onLogout, currentUser }) => {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const isAdmin = Boolean(currentUser?.isAdmin || currentUser?.is_admin);
+  const roleLabel = useMemo(() => {
+    const rol = currentUser?.rol || (isAdmin ? 'admin' : 'usuario');
+    if (rol === 'admin') return 'ADMINISTRADOR';
+    if (rol === 'abogado') return 'ABOGADO';
+    return 'USUARIO';
+  }, [currentUser?.rol, isAdmin]);
+
+  const navigate = (view: ViewState) => {
+    onViewChange(view);
+    setMobileMenuOpen(false);
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -54,7 +68,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
             <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
             Calendario
           </button>
-          {(currentUser?.isAdmin || currentUser?.is_admin) && (
+          {isAdmin && (
             <button 
               onClick={() => onViewChange('users')}
               className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${currentView === 'users' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'}`}
@@ -72,7 +86,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
               </div>
               <div className="ml-3 overflow-hidden">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-200 truncate">{currentUser?.username}</p>
-                <p className="text-[8px] text-orange-500 font-black uppercase tracking-tighter">{currentUser?.isAdmin ? 'ADMINISTRADOR' : 'SOCIO ESTUDIO'}</p>
+                <p className="text-[8px] text-orange-500 font-black uppercase tracking-tighter">{roleLabel}</p>
               </div>
             </div>
             <button onClick={onLogout} title="Cerrar Sesión" className="text-slate-500 hover:text-red-500 ml-2 transition-colors">
@@ -84,9 +98,112 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
 
       <main className="flex-1 flex flex-col h-full bg-slate-50 overflow-hidden">
         <header className="md:hidden bg-black text-white p-4 flex justify-between items-center shadow-lg">
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen(true)}
+            className="p-2 border border-slate-700 rounded-lg"
+            aria-label="Abrir menú"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+
           <span className="text-xs font-serif font-bold tracking-widest text-orange-500 uppercase">NEIRA TRUJILLO</span>
-          <button onClick={onLogout} className="p-2 text-white font-black text-[9px] uppercase border border-slate-700 rounded-lg">CERRAR</button>
+
+          <button
+            onClick={onLogout}
+            className="p-2 text-white font-black text-[9px] uppercase border border-slate-700 rounded-lg"
+          >
+            CERRAR
+          </button>
         </header>
+
+        {/* Menú móvil (drawer) */}
+        {mobileMenuOpen && (
+          <div className="fixed inset-0 z-50 md:hidden">
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/60"
+              onClick={() => setMobileMenuOpen(false)}
+              aria-label="Cerrar menú"
+            />
+            <div className="absolute top-0 left-0 h-full w-80 max-w-[85%] bg-black text-white border-r border-slate-800">
+              <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Sesión</p>
+                  <p className="text-sm font-black text-white truncate">{currentUser?.username}</p>
+                  <p className="text-[9px] text-orange-500 font-black uppercase tracking-widest">{roleLabel}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="p-2 rounded-lg border border-slate-700"
+                  aria-label="Cerrar"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <nav className="p-4 space-y-2">
+                <button
+                  onClick={() => navigate('dashboard')}
+                  className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${
+                    currentView === 'dashboard' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'
+                  }`}
+                >
+                  <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                  Dashboard
+                </button>
+
+                <button
+                  onClick={() => navigate('cases')}
+                  className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${
+                    currentView === 'cases' || currentView === 'case-detail' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'
+                  }`}
+                >
+                  <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                  Expedientes
+                </button>
+
+                <button
+                  onClick={() => navigate('new-case')}
+                  className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${
+                    currentView === 'new-case' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'
+                  }`}
+                >
+                  <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
+                  Nueva Carátula
+                </button>
+
+                <button
+                  onClick={() => navigate('calendar')}
+                  className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${
+                    currentView === 'calendar' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'
+                  }`}
+                >
+                  <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                  Calendario
+                </button>
+
+                {isAdmin && (
+                  <button
+                    onClick={() => navigate('users')}
+                    className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${
+                      currentView === 'users' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'
+                    }`}
+                  >
+                    <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                    Usuarios
+                  </button>
+                )}
+              </nav>
+            </div>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar">
           {children}
         </div>

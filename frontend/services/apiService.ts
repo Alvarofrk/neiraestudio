@@ -317,13 +317,13 @@ export const apiDeleteNote = async (id: string): Promise<void> => {
 // ============ USUARIOS ============
 export const apiGetUsers = async (): Promise<User[]> => {
   const users = await apiRequest<any[]>('/users/');
-  console.log('Respuesta de apiGetUsers:', users);
   // Si la respuesta es un array (vacío o con datos), está bien
   if (Array.isArray(users)) {
     return users.map(user => ({
       ...user,
       id: String(user.id),
       isAdmin: user.is_admin ?? user.isAdmin ?? false,
+      rol: user.rol || (user.is_admin ? 'admin' : 'usuario'),
     }));
   }
   // Si no es un array, retornar array vacío (no lanzar error)

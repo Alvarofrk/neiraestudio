@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { LawCase, CaseStatus, CasePriority, ViewState, User, DashboardStats } from '../types';
+import { LawCase, CaseStatus, CasePriority, ViewState, DashboardStats } from '../types';
 import * as api from '../services/apiService';
 
 interface DashboardProps {
@@ -12,7 +12,6 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase, onUpdateCase }) => {
   const now = new Date();
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -22,11 +21,7 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [user, stats] = await Promise.all([
-          api.apiGetCurrentUser(),
-          api.apiGetDashboard()
-        ]);
-        setCurrentUser(user);
+        const stats = await api.apiGetDashboard();
         setDashboardStats(stats);
       } catch (error) {
         console.error('Error al cargar datos del dashboard:', error);
@@ -48,27 +43,44 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
     return { label: 'Pendiente', text: 'text-slate-500' };
   };
 
-  const handleToggleAlerta = async (e: React.MouseEvent, lawCase: LawCase, alertaId: string) => {
+  const handleToggleAlerta = async (e: React.MouseEvent, alertaId: string) => {
     e.stopPropagation();
     try {
       const updatedAlerta = await api.apiToggleAlerta(String(alertaId));
-      // Actualizar el caso con la alerta actualizada
-      const updatedAlerts = (lawCase.alertas || []).map(a => 
-        String(a.id) === String(alertaId) ? updatedAlerta : a
-      );
-      onUpdateCase({ ...lawCase, alertas: updatedAlerts });
+      // Actualizar el dashboard localmente (evita PATCH del caso completo)
+      setDashboardStats(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          alertas: (prev.alertas || []).map((a: any) =>
+            String(a.id) === String(alertaId) ? { ...a, ...updatedAlerta } : a
+          ),
+        };
+      });
     } catch (error) {
       console.error('Error al actualizar alerta:', error);
       alert('Error al actualizar la alerta. Por favor, intenta nuevamente.');
     }
   };
 
-  // Usar alertas del dashboard si están disponibles, sino de los casos
-  const allAlerts = dashboardStats?.alertas || casesArray.flatMap(c => 
-    (c.alertas || []).map(a => ({ ...a, caratula: c.caratula, caseObj: c }))
-  );
+  // Usar alertas del dashboard si están disponibles, sino de los casos.
+  // Normalizar para asegurar que siempre exista caseObj para navegar.
+  const allAlertsRaw: any[] =
+    (dashboardStats?.alertas as any[]) ||
+    casesArray.flatMap(c => (c.alertas || []).map(a => ({ ...a, caratula: c.caratula, caseObj: c })));
+
+  const allAlerts: any[] = allAlertsRaw.map((a) => {
+    if (a?.caseObj) return a;
+    const caseId = a?.case_id ?? a?.caso_id ?? a?.caso;
+    const found = caseId ? casesArray.find(c => String(c.id) === String(caseId)) : undefined;
+    return {
+      ...a,
+      caratula: a?.caratula ?? found?.caratula,
+      caseObj: found ?? (caseId ? ({ id: String(caseId) } as any) : undefined),
+    };
+  });
   
-  const sortedAlerts = allAlerts.sort((a, b) => {
+  const sortedAlerts = [...allAlerts].sort((a, b) => {
     if (a.cumplida !== b.cumplida) return a.cumplida ? 1 : -1;
     return new Date(a.fecha_vencimiento).getTime() - new Date(b.fecha_vencimiento).getTime();
   });
@@ -217,7 +229,7 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
                         {alerta.cumplida ? '● Finalizada' : urgency.label}
                       </span>
                       <button 
-                        onClick={(e) => handleToggleAlerta(e, alerta.caseObj, alerta.id)}
+                        onClick={(e) => handleToggleAlerta(e, alerta.id)}
                         className={`text-[8px] font-black uppercase border px-3 py-1 rounded-xl transition-all ${alerta.cumplida ? 'text-orange-500 border-orange-200 bg-white' : 'text-slate-400 border-slate-200 bg-white hover:text-green-600 hover:border-green-100'}`}
                       >
                         {alerta.cumplida ? 'Reabrir' : 'Listo ✓'}

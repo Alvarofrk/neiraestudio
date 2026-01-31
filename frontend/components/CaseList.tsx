@@ -264,7 +264,8 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
-        <table className="w-full text-left border-collapse">
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full min-w-[760px] text-left border-collapse">
           <thead>
             <tr className="bg-zinc-900 text-white text-[10px] font-black uppercase tracking-widest">
               <th className="px-6 py-4">ID Interno / Exp</th>
@@ -329,7 +330,8 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
             ))
             )}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
     </div>
   );
