@@ -8,9 +8,11 @@ interface LayoutProps {
   onViewChange: (view: ViewState) => void;
   onLogout: () => void;
   currentUser: User | null;
+  onPreloadCases?: () => void;
+  onPreloadDashboard?: () => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, onLogout, currentUser }) => {
+const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, onLogout, currentUser, onPreloadCases, onPreloadDashboard }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const isAdmin = Boolean(currentUser?.isAdmin || currentUser?.is_admin);
@@ -42,6 +44,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
         <nav className="flex-1 mt-8 px-4 space-y-2">
           <button 
             onClick={() => onViewChange('dashboard')}
+            onMouseEnter={() => onPreloadDashboard?.()}
             className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${currentView === 'dashboard' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'}`}
           >
             <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
@@ -49,6 +52,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
           </button>
           <button 
             onClick={() => onViewChange('cases')}
+            onMouseEnter={() => onPreloadCases?.()}
             className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${currentView === 'cases' || currentView === 'case-detail' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'}`}
           >
             <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
@@ -150,6 +154,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
               <nav className="p-4 space-y-2">
                 <button
                   onClick={() => navigate('dashboard')}
+                  onMouseEnter={() => onPreloadDashboard?.()}
                   className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${
                     currentView === 'dashboard' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'
                   }`}
@@ -160,6 +165,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
 
                 <button
                   onClick={() => navigate('cases')}
+                  onMouseEnter={() => onPreloadCases?.()}
                   className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${
                     currentView === 'cases' || currentView === 'case-detail' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'
                   }`}

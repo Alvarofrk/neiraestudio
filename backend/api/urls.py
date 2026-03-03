@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
-    AuthView, CurrentUserView, DashboardView,
+    AuthView, CurrentUserView, DashboardView, DashboardAlertasView,
     UserViewSet, LawCaseViewSet,
     CaseActuacionViewSet, CaseAlertaViewSet, CaseNoteViewSet,
     ClienteViewSet, CaseTagViewSet, ActuacionTemplateViewSet,
@@ -29,6 +29,7 @@ urlpatterns = [
     
     # Dashboard
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
+    path('dashboard/alertas/', DashboardAlertasView.as_view(), name='dashboard-alertas'),
     
     # Routers
     path('', include(router.urls)),

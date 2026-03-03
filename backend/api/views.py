@@ -4,18 +4,22 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.db import transaction, IntegrityError, connection
 from django.db.models import Q, Prefetch, Count
 from django.utils import timezone
 from django.http import HttpResponse
+import re
 from datetime import datetime, timedelta
+import json
 
 from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso
 from .serializers import (
     UserSerializer, UserCreateSerializer, UserUpdateSerializer,
-    LawCaseSerializer, CaseActuacionSerializer,
-    CaseAlertaSerializer, CaseNoteSerializer, ClienteSerializer,
+    LawCaseSerializer, LawCaseListSerializer, DashboardRecentCaseSerializer,
+    CaseActuacionSerializer, CaseAlertaSerializer, DashboardAlertaSerializer,
+    CaseNoteSerializer, ClienteSerializer, ClienteMinimalSerializer,
     CaseTagSerializer, ActuacionTemplateSerializer,
-    AvisoSerializer, LawCaseListSerializer, LoginSerializer
+    AvisoSerializer, LoginSerializer
 )
 
 
@@ -39,8 +43,7 @@ class AvisoViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=self.request.user)
 
     def get_queryset(self):
-        # Admin ve todos, usuario solo activos
-        return Aviso.objects.filter(active=True).order_by('-created_at')
+        return Aviso.objects.filter(active=True).select_related('created_by').order_by('-created_at')
 
 
 class IsAdminOrReadOnly(permissions.BasePermission):
@@ -83,10 +86,17 @@ class CurrentUserView(APIView):
         return Response(UserSerializer(request.user).data)
 
 
+class UserListPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class UserViewSet(viewsets.ModelViewSet):
     """ViewSet para gestión de usuarios (solo admin)"""
     queryset = User.objects.all()
     permission_classes = [IsAdminOrReadOnly]
+    pagination_class = UserListPagination
     
     def get_serializer_class(self):
         if self.action == 'create':
@@ -145,7 +155,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
 
 class CaseListPagination(PageNumberPagination):
-    page_size = 5
+    page_size = 15
     page_size_query_param = 'page_size'
     max_page_size = 50
 
@@ -235,19 +245,39 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         if fecha_modificacion_hasta:
             queryset = queryset.filter(updated_at__lte=fecha_modificacion_hasta)
         
-        return queryset.distinct()
-    
+        return queryset.distinct() if etiqueta_id else queryset
+
+    def list(self, request, *args, **kwargs):
+        """Lista expedientes. Con ?include_clientes=1 devuelve clientes en la misma respuesta (1 round-trip menos)."""
+        response = super().list(request, *args, **kwargs)
+        if request.query_params.get('include_clientes') == '1':
+            clientes_qs = Cliente.objects.only('id', 'nombre_completo').order_by('nombre_completo')[:500]
+            response.data['clientes'] = ClienteMinimalSerializer(clientes_qs, many=True).data
+        return response
+
     def perform_create(self, serializer):
-        """Generar código interno automáticamente"""
-        year = timezone.now().year
-        count = LawCase.objects.count() + 1
-        codigo = f"ENT-{str(count).zfill(4)}-{year}-JLCA"
-        
-        serializer.save(
-            codigo_interno=codigo,
-            created_by=self.request.user,
-            last_modified_by=self.request.user
-        )
+        """Generar código interno automáticamente (transacción atómica para evitar race condition)."""
+        for attempt in range(3):
+            try:
+                with transaction.atomic():
+                    year = timezone.now().year
+                    last = LawCase.objects.order_by('-id').select_for_update().first()
+                    if last and last.codigo_interno:
+                        match = re.search(r'ENT-(\d+)-', last.codigo_interno)
+                        next_num = int(match.group(1)) + 1 if match else LawCase.objects.count() + 1
+                    else:
+                        next_num = LawCase.objects.count() + 1
+                    codigo = f"ENT-{str(next_num).zfill(4)}-{year}-JLCA"
+                    
+                    serializer.save(
+                        codigo_interno=codigo,
+                        created_by=self.request.user,
+                        last_modified_by=self.request.user
+                    )
+                return
+            except IntegrityError:
+                if attempt >= 2:
+                    raise
     
     def perform_update(self, serializer):
         serializer.save(last_modified_by=self.request.user)
@@ -326,8 +356,9 @@ class LawCaseViewSet(viewsets.ModelViewSet):
             cell.font = header_font
             cell.alignment = center_alignment
         
-        # Datos
-        for row_num, caso in enumerate(queryset, 2):
+        # Datos: iterator() evita cargar todo en memoria; select_related ya aplicado en get_queryset
+        row_num = 2
+        for caso in queryset.iterator(chunk_size=500):
             cliente_nombre = caso.cliente.nombre_completo if caso.cliente else caso.cliente_nombre
             cliente_dni = caso.cliente.dni_ruc if caso.cliente else caso.cliente_dni
             
@@ -345,6 +376,7 @@ class LawCaseViewSet(viewsets.ModelViewSet):
             ws.cell(row=row_num, column=12, value=caso.updated_at.strftime('%Y-%m-%d %H:%M') if caso.updated_at else '')
             ws.cell(row=row_num, column=13, value=caso.created_by.username if caso.created_by else '')
             ws.cell(row=row_num, column=14, value=caso.last_modified_by.username if caso.last_modified_by else '')
+            row_num += 1
         
         # Ajustar ancho de columnas
         column_widths = [18, 40, 18, 25, 12, 12, 30, 15, 25, 30, 12, 18, 15, 15]
@@ -546,11 +578,18 @@ class CaseNoteViewSet(viewsets.ModelViewSet):
         return queryset
 
 
+class ClienteListPagination(PageNumberPagination):
+    page_size = 100
+    page_size_query_param = 'page_size'
+    max_page_size = 500
+
+
 class ClienteViewSet(viewsets.ModelViewSet):
     """ViewSet para gestión de clientes"""
     queryset = Cliente.objects.all()
     serializer_class = ClienteSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = ClienteListPagination
     
     def get_queryset(self):
         # Optimización: Annotate total_expedientes en la query principal para evitar N+1 en el serializer
@@ -582,7 +621,7 @@ class CaseTagViewSet(viewsets.ModelViewSet):
 
 class ActuacionTemplateViewSet(viewsets.ModelViewSet):
     """ViewSet para gestión de plantillas de actuaciones"""
-    queryset = ActuacionTemplate.objects.all()
+    queryset = ActuacionTemplate.objects.select_related('created_by')
     serializer_class = ActuacionTemplateSerializer
     permission_classes = [permissions.IsAuthenticated]
     
@@ -590,7 +629,7 @@ class ActuacionTemplateViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=self.request.user)
     
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = ActuacionTemplate.objects.select_related('created_by')
         tipo = self.request.query_params.get('tipo', None)
         if tipo:
             queryset = queryset.filter(tipo=tipo)
@@ -600,62 +639,24 @@ class ActuacionTemplateViewSet(viewsets.ModelViewSet):
 class DashboardView(APIView):
     """Vista para datos del dashboard"""
     permission_classes = [permissions.IsAuthenticated]
+
+    @staticmethod
+    def _get_cases_queryset_for_user(request):
+        """Queryset base de expedientes según rol: admin ve todos, abogado solo los asignados.
+        Usa igualdad exacta (no icontains) para aprovechar índice en abogado_responsable."""
+        if request.user.is_admin:
+            return LawCase.objects.all().order_by('-updated_at')
+        return LawCase.objects.filter(
+            abogado_responsable=request.user.username
+        ).order_by('-updated_at')
     
     def get(self, request):
-        """Obtener estadísticas y alertas para dashboard"""
+        """Obtener estadísticas y alertas para dashboard.
+        Una sola query raw para stats+fuero+abogado+meses (reduce 4 round-trips a 1)."""
         from django.db.models import Count
         from django.db.models.functions import TruncMonth
-        from django.utils import timezone
         from django.db.models import Q
 
-        if self.request.user.is_admin:
-            cases = LawCase.objects.all().order_by('-updated_at')
-        else:
-            # Abogados solo ven sus casos asignados (por nombre de usuario)
-            # Nota: abogado_responsable es CharField, asumimos que guarda el username o nombre.
-            # Intentaremos match parcial o exacto con username.
-            cases = LawCase.objects.filter(
-                abogado_responsable__icontains=self.request.user.username
-            ).order_by('-updated_at')
-            
-        # Aviso principal (último activo)
-        ultimo_aviso = Aviso.objects.filter(active=True).order_by('-created_at').first()
-        aviso_data = AvisoSerializer(ultimo_aviso).data if ultimo_aviso else None
-
-        # ---- Estadísticas básicas (1 query) ----
-        status_counts = dict(
-            cases.values('estado')
-            .annotate(total=Count('id'))
-            .values_list('estado', 'total')
-        )
-
-        total_cases = cases.count()
-        stats = {
-            'total_cases': total_cases,
-            'open_cases': status_counts.get(LawCase.CaseStatus.OPEN, 0),
-            'in_progress_cases': status_counts.get(LawCase.CaseStatus.IN_PROGRESS, 0),
-            'paused_cases': status_counts.get(LawCase.CaseStatus.PAUSED, 0),
-            'closed_cases': status_counts.get(LawCase.CaseStatus.CLOSED, 0),
-        }
-
-        # ---- Estadísticas por fuero (1 query) ----
-        fuero_counts = dict(
-            cases.values('fuero')
-            .annotate(total=Count('id'))
-            .values_list('fuero', 'total')
-        )
-        fuero_order = ['Civil', 'Comercial', 'Penal', 'Laboral', 'Familia']
-        stats_by_fuero = {fuero: int(fuero_counts.get(fuero, 0)) for fuero in fuero_order}
-
-        # ---- Estadísticas por abogado (1 query) ----
-        stats_by_abogado = {
-            row['abogado_responsable']: int(row['total'])
-            for row in cases.exclude(abogado_responsable='')
-            .values('abogado_responsable')
-            .annotate(total=Count('id'))
-        }
-
-        # ---- Casos por mes (últimos 12 meses) (1 query) ----
         def month_shift(dt, delta_months: int):
             year = dt.year + (dt.month - 1 + delta_months) // 12
             month = (dt.month - 1 + delta_months) % 12 + 1
@@ -664,40 +665,129 @@ class DashboardView(APIView):
         now = timezone.now()
         month0 = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         start_12m = month_shift(month0, -11)
+        fuero_order = ['Civil', 'Comercial', 'Penal', 'Laboral', 'Familia']
 
-        month_rows = (
-            cases.filter(created_at__gte=start_12m)
-            .annotate(mes=TruncMonth('created_at'))
-            .values('mes')
-            .annotate(total=Count('id'))
-            .order_by('mes')
-        )
-        month_map = {row['mes'].strftime('%Y-%m'): int(row['total']) for row in month_rows if row['mes']}
+        # ---- 1 query: aviso ----
+        ultimo_aviso = Aviso.objects.filter(active=True).select_related('created_by').order_by('-created_at').first()
+        aviso_data = AvisoSerializer(ultimo_aviso).data if ultimo_aviso else None
+
+        # ---- 1 query raw (PostgreSQL): stats+fuero+abogado+meses en 1 round-trip ----
+        cases = self._get_cases_queryset_for_user(request)
+        if connection.vendor == 'postgresql':
+            if request.user.is_admin:
+                where_sql, params = "1=1", [start_12m]
+            else:
+                where_sql, params = "abogado_responsable = %s", [request.user.username, start_12m]
+            with connection.cursor() as cursor:
+                cursor.execute(f"""
+                    WITH base AS (
+                        SELECT id, estado, fuero, abogado_responsable, date_trunc('month', created_at)::date as mes
+                        FROM api_lawcase WHERE {where_sql}
+                    )
+                    SELECT
+                        (SELECT COUNT(*) FROM base) as total,
+                        (SELECT COUNT(*) FROM base WHERE estado = 'Abierto') as open_cases,
+                        (SELECT COUNT(*) FROM base WHERE estado = 'En Trámite') as in_progress_cases,
+                        (SELECT COUNT(*) FROM base WHERE estado = 'Pausado') as paused_cases,
+                        (SELECT COUNT(*) FROM base WHERE estado = 'Cerrado') as closed_cases,
+                        (SELECT COALESCE(jsonb_object_agg(fuero, cnt), '{{}}'::jsonb) FROM (
+                            SELECT fuero, COUNT(*)::int as cnt FROM base GROUP BY fuero
+                        ) f) as fuero_json,
+                        (SELECT COALESCE(jsonb_object_agg(abogado_responsable, cnt), '{{}}'::jsonb) FROM (
+                            SELECT abogado_responsable, COUNT(*)::int as cnt
+                            FROM base WHERE abogado_responsable != '' GROUP BY abogado_responsable
+                        ) a) as abogado_json,
+                        (SELECT COALESCE(jsonb_object_agg(to_char(mes, 'YYYY-MM'), cnt), '{{}}'::jsonb) FROM (
+                            SELECT mes, COUNT(*)::int as cnt FROM base WHERE mes >= %s GROUP BY mes
+                        ) m) as month_json
+                    FROM (SELECT 1) x
+                """, params)
+                row = cursor.fetchone()
+            total, open_c, in_prog, paused, closed = row[0] or 0, row[1] or 0, row[2] or 0, row[3] or 0, row[4] or 0
+            def _to_dict(v):
+                if v is None: return {}
+                if isinstance(v, dict): return v
+                return json.loads(v) if isinstance(v, str) else {}
+            fuero_json = _to_dict(row[5])
+            abogado_json = _to_dict(row[6])
+            month_json = _to_dict(row[7])
+        else:
+            # SQLite fallback: ORM (4 queries)
+            stats_agg = cases.aggregate(
+                total=Count('id'),
+                open_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.OPEN)),
+                in_progress_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.IN_PROGRESS)),
+                paused_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.PAUSED)),
+                closed_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.CLOSED)),
+            )
+            total = stats_agg['total'] or 0
+            open_c = stats_agg['open_cases'] or 0
+            in_prog = stats_agg['in_progress_cases'] or 0
+            paused = stats_agg['paused_cases'] or 0
+            closed = stats_agg['closed_cases'] or 0
+            fuero_json = dict(cases.values('fuero').annotate(cnt=Count('id')).values_list('fuero', 'cnt'))
+            abogado_json = dict(cases.exclude(abogado_responsable='').values('abogado_responsable').annotate(cnt=Count('id')).values_list('abogado_responsable', 'cnt'))
+            month_rows = cases.filter(created_at__gte=start_12m).annotate(mes=TruncMonth('created_at')).values('mes').annotate(cnt=Count('id'))
+            month_json = {r['mes'].strftime('%Y-%m'): r['cnt'] for r in month_rows if r['mes']}
+
+        stats = {'total_cases': total, 'open_cases': open_c, 'in_progress_cases': in_prog, 'paused_cases': paused, 'closed_cases': closed}
+        stats_by_fuero = {f: int(fuero_json.get(f, 0)) for f in fuero_order}
+        stats_by_abogado = {k: int(v) for k, v in (abogado_json.items() if abogado_json else [])}
         cases_by_month = [
-            {'mes': month_shift(month0, -i).strftime('%Y-%m'), 'total': month_map.get(month_shift(month0, -i).strftime('%Y-%m'), 0)}
+            {'mes': month_shift(month0, -i).strftime('%Y-%m'), 'total': int(month_json.get(month_shift(month0, -i).strftime('%Y-%m'), 0))}
             for i in range(11, -1, -1)
         ]
 
-        # ---- Alertas (limitadas) ----
+        # ---- Alertas: subquery sin ORDER BY (más eficiente que IN con miles de IDs) ----
+        cases_subquery = cases.only('id').order_by()
         alertas_qs = (
-            CaseAlerta.objects.select_related('caso', 'created_by', 'completed_by')
+            CaseAlerta.objects.filter(caso__in=cases_subquery)
+            .select_related('caso', 'created_by', 'completed_by')
             .order_by('cumplida', 'fecha_vencimiento')
         )[:5]
+        alertas_data = DashboardAlertaSerializer(alertas_qs, many=True).data
 
-        # ---- Últimos casos actualizados ----
+        # ---- Últimos casos: solo campos usados, sin prefetch etiquetas (1 query menos) ----
         recent_cases = (
-            LawCase.objects.select_related('created_by', 'last_modified_by', 'cliente')
-            .prefetch_related('etiquetas')
-            .order_by('-updated_at')[:5]
-        )
+            cases.only('id', 'codigo_interno', 'caratula', 'updated_at', 'last_modified_by')
+            .select_related('last_modified_by')
+        )[:5]
 
         data = {
             'stats': stats,
-            'recent_cases': LawCaseSerializer(recent_cases, many=True).data,
-            'alertas': CaseAlertaSerializer(alertas_qs, many=True).data,
+            'recent_cases': DashboardRecentCaseSerializer(recent_cases, many=True).data,
+            'alertas': alertas_data,
             'cases_by_month': cases_by_month,
             'stats_by_fuero': stats_by_fuero,
             'stats_by_abogado': stats_by_abogado,
             'aviso': aviso_data
         }
         return Response(data)
+
+
+class DashboardAlertasView(APIView):
+    """Alertas paginadas del dashboard, filtradas por expedientes accesibles del usuario."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from rest_framework.pagination import PageNumberPagination
+
+        page = int(request.query_params.get('page', 1))
+        page_size = 5
+
+        cases = DashboardView._get_cases_queryset_for_user(request)
+        cases_subquery = cases.only('id').order_by()
+        alertas_qs = (
+            CaseAlerta.objects.filter(caso__in=cases_subquery)
+            .select_related('caso', 'created_by', 'completed_by')
+            .order_by('cumplida', 'fecha_vencimiento')
+        )
+
+        paginator = PageNumberPagination()
+        paginator.page_size = page_size
+        paginator.page_size_query_param = None
+        page_qs = paginator.paginate_queryset(alertas_qs, request)
+
+        return paginator.get_paginated_response(
+            DashboardAlertaSerializer(page_qs, many=True).data
+        )

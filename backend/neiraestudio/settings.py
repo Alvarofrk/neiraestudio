@@ -86,8 +86,8 @@ DB_PASSWORD = config('DB_PASSWORD', default='')
 DB_HOST = config('DB_HOST', default='')
 DB_PORT = config('DB_PORT', default='')
 DB_SSLMODE = config('DB_SSLMODE', default='')
-# Cerrar la conexión al final de cada request (0 = no reutilizar). Así no se acumulan: cada petición
-# abre, usa y cierra → el contador siempre baja. Evita "too many connections" en planes con límite.
+# Clever Cloud limita conexiones por rol (~5). CONN_MAX_AGE=0 cierra tras cada request
+# para no acumular conexiones (evita "too many connections").
 DB_CONN_MAX_AGE = config('DB_CONN_MAX_AGE', default=0, cast=int)
 
 DATABASES = {

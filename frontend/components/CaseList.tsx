@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { LawCase, CaseStatus, ViewState, Cliente, CaseTag } from '../types';
 import * as api from '../services/apiService';
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 15;
 
 interface CaseListProps {
   cases: LawCase[];
@@ -12,9 +12,11 @@ interface CaseListProps {
   onSelectCase: (lawCase: LawCase) => void | Promise<void>;
   onViewChange: (view: ViewState) => void;
   onLoadCases: (filters?: api.CasesListFilters, page?: number) => Promise<void>;
+  clientesProp?: Cliente[];
+  tagsProp?: CaseTag[];
 }
 
-const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSelectCase, onViewChange, onLoadCases }) => {
+const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSelectCase, onViewChange, onLoadCases, clientesProp, tagsProp }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [abogadoFilter, setAbogadoFilter] = useState('');
@@ -32,22 +34,26 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
   const casesArray = Array.isArray(cases) ? cases : [];
   const totalPages = Math.max(1, Math.ceil(casesCount / PAGE_SIZE));
 
-  // Cargar clientes y tags
+  // Usar props si vienen de App (cache); sino cargar desde API
+  const clientesToUse = clientesProp && clientesProp.length > 0 ? clientesProp : clientes;
+  const tagsToUse = tagsProp && tagsProp.length > 0 ? tagsProp : tags;
+
   useEffect(() => {
+    if (clientesProp !== undefined && tagsProp !== undefined) return;
     const loadData = async () => {
       try {
         const [clientesData, tagsData] = await Promise.all([
-          api.apiGetClientes(),
-          api.apiGetTags()
+          clientesProp === undefined ? api.apiGetClientes() : Promise.resolve([]),
+          tagsProp === undefined ? api.apiGetTags() : Promise.resolve([])
         ]);
-        setClientes(clientesData);
-        setTags(tagsData);
+        if (clientesProp === undefined) setClientes(clientesData);
+        if (tagsProp === undefined) setTags(tagsData);
       } catch (error) {
         console.error('Error al cargar datos:', error);
       }
     };
     loadData();
-  }, []);
+  }, [clientesProp, tagsProp]);
 
   const buildFilters = (): api.CasesListFilters | undefined => {
     const filters: api.CasesListFilters = {};
@@ -63,10 +69,16 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
 
   // Aplicar filtros (con debounce para búsqueda)
   useEffect(() => {
+    const hasFilters = searchTerm || statusFilter !== 'all' || abogadoFilter || fueroFilter || juzgadoFilter || clienteFilter || etiquetaFilter;
+    if (!hasFilters && cases.length > 0) return;
     const applyFilters = async (page: number = 1) => {
-      setLoading(true);
-      await onLoadCases(buildFilters(), page);
-      setLoading(false);
+      const needsLoading = cases.length === 0;
+      if (needsLoading) setLoading(true);
+      try {
+        await onLoadCases(buildFilters(), page);
+      } finally {
+        if (needsLoading) setLoading(false);
+      }
     };
     const delay = searchTerm ? 500 : 0;
     const timeoutId = setTimeout(() => applyFilters(1), delay);
@@ -225,7 +237,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
                 onChange={(e) => setClienteFilter(e.target.value || '')}
               >
                 <option value="">Todos los clientes</option>
-                {clientes.map(c => (
+                {clientesToUse.map(c => (
                   <option key={c.id} value={c.id}>{c.nombre_completo}</option>
                 ))}
               </select>
@@ -238,7 +250,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
                 onChange={(e) => setEtiquetaFilter(e.target.value || '')}
               >
                 <option value="">Todas las etiquetas</option>
-                {tags.map(t => (
+                {tagsToUse.map(t => (
                   <option key={t.id} value={t.id}>{t.nombre}</option>
                 ))}
               </select>
@@ -264,7 +276,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden relative">
-        {loading && (
+        {loading && casesArray.length === 0 && (
           <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center rounded-2xl">
             <span className="animate-spin rounded-full h-8 w-8 border-2 border-orange-500 border-t-transparent" />
           </div>

@@ -148,6 +148,13 @@ class CaseNoteSerializer(serializers.ModelSerializer):
         return obj.created_by.username if obj.created_by else None
 
 
+class ClienteMinimalSerializer(serializers.ModelSerializer):
+    """Solo id y nombre para dropdowns (menos payload)."""
+    class Meta:
+        model = Cliente
+        fields = ['id', 'nombre_completo']
+
+
 class ClienteSerializer(serializers.ModelSerializer):
     """Serializer para clientes"""
     total_expedientes = serializers.SerializerMethodField()
@@ -161,8 +168,8 @@ class ClienteSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at', 'total_expedientes']
     
     def get_total_expedientes(self, obj):
-        # Usar el valor anotado si existe, sino contar (fallback)
-        return getattr(obj, 'total_expedientes_count', obj.expedientes.count())
+        # Usar solo el valor anotado; evitar obj.expedientes.count() (N+1)
+        return getattr(obj, 'total_expedientes_count', 0)
 
 
 class CaseTagSerializer(serializers.ModelSerializer):
@@ -225,6 +232,18 @@ class LawCaseSerializer(serializers.ModelSerializer):
     def get_created_by_username(self, obj):
         return obj.created_by.username if obj.created_by else None
     
+    def get_last_modified_by_username(self, obj):
+        return obj.last_modified_by.username if obj.last_modified_by else None
+
+
+class DashboardRecentCaseSerializer(serializers.ModelSerializer):
+    """Mínimo para tabla del dashboard: solo campos usados. Sin etiquetas/cliente = 1 query menos."""
+    last_modified_by_username = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LawCase
+        fields = ['id', 'codigo_interno', 'caratula', 'last_modified_by_username', 'updated_at']
+
     def get_last_modified_by_username(self, obj):
         return obj.last_modified_by.username if obj.last_modified_by else None
 

@@ -8,14 +8,25 @@ interface DashboardProps {
   onViewChange: (view: ViewState) => void;
   onSelectCase: (lawCase: LawCase) => void;
   onUpdateCase: (updatedCase: LawCase) => void;
+  initialStats?: DashboardStats | null;
+  onStatsLoaded?: (stats: DashboardStats) => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase, onUpdateCase }) => {
+const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase, onUpdateCase, initialStats, onStatsLoaded }) => {
   const now = new Date();
-  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(initialStats ?? null);
+  const [loading, setLoading] = useState(!initialStats);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editingAviso, setEditingAviso] = useState(false);
   const [avisoContent, setAvisoContent] = useState('');
+  const [displayedAlerts, setDisplayedAlerts] = useState<any[]>([]);
+  const [alertsPage, setAlertsPage] = useState(1);
+  const [hasMoreAlerts, setHasMoreAlerts] = useState(true);
+  const [loadingMoreAlerts, setLoadingMoreAlerts] = useState(false);
+  const [displayedCases, setDisplayedCases] = useState<LawCase[]>([]);
+  const [casesPage, setCasesPage] = useState(1);
+  const [hasMoreCases, setHasMoreCases] = useState(true);
+  const [loadingMoreCases, setLoadingMoreCases] = useState(false);
 
   useEffect(() => {
     if (dashboardStats?.aviso) {
@@ -23,54 +34,58 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
     }
   }, [dashboardStats]);
 
+  useEffect(() => {
+    if (initialStats) {
+      setDisplayedAlerts(initialStats.alertas || []);
+      setDisplayedCases((initialStats.recent_cases || []) as unknown as LawCase[]);
+    }
+  }, [initialStats]);
+
+  const loadData = async (showLoading = true) => {
+    setLoadError(null);
+    if (showLoading) setLoading(true);
+    try {
+      const stats = await api.apiGetDashboard();
+      setDashboardStats(stats);
+      onStatsLoaded?.(stats);
+      if (stats.alertas) {
+        setDisplayedAlerts(stats.alertas);
+        setHasMoreAlerts(true);
+      }
+      if (stats.recent_cases) {
+        setDisplayedCases(stats.recent_cases as unknown as LawCase[]);
+        setHasMoreCases(true);
+      }
+    } catch (error: any) {
+      console.error('Error al cargar datos del dashboard:', error);
+      const msg = error?.name === 'AbortError'
+        ? 'El servidor tardó demasiado. Si está en modo ahorro, puede tardar hasta 1 min en despertar.'
+        : (error?.message || 'No se pudieron cargar los datos.');
+      setLoadError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSaveAviso = async () => {
     try {
       await api.apiCreateAviso(avisoContent);
       setEditingAviso(false);
-      // Recargar stats de dashboard para obtener el nuevo aviso
       const stats = await api.apiGetDashboard();
       setDashboardStats(stats);
+      onStatsLoaded?.(stats);
     } catch (e) {
       alert('Error al guardar aviso');
     }
   };
 
-  // Lazy Loading States
-  const [displayedAlerts, setDisplayedAlerts] = useState<any[]>([]);
-  const [alertsPage, setAlertsPage] = useState(1);
-  const [hasMoreAlerts, setHasMoreAlerts] = useState(true);
-  const [loadingMoreAlerts, setLoadingMoreAlerts] = useState(false);
-
-  const [displayedCases, setDisplayedCases] = useState<LawCase[]>([]);
-  const [casesPage, setCasesPage] = useState(1);
-  const [hasMoreCases, setHasMoreCases] = useState(true);
-  const [loadingMoreCases, setLoadingMoreCases] = useState(false);
-
   // Asegurar que cases sea un array
   const casesArray = Array.isArray(cases) ? cases : [];
 
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const stats = await api.apiGetDashboard();
-        setDashboardStats(stats);
-
-        // Inicializar listas lazy con lo que trajo el dashboard (primeras 5)
-        if (stats.alertas) {
-          setDisplayedAlerts(stats.alertas);
-          setHasMoreAlerts(true); // Asumimos que hay más si llenamos el cupo
-        }
-        if (stats.recent_cases) {
-          setDisplayedCases(stats.recent_cases as unknown as LawCase[]);
-          setHasMoreCases(true);
-        }
-      } catch (error) {
-        console.error('Error al cargar datos del dashboard:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadData();
+    const hasInitial = !!initialStats;
+    if (hasInitial) return;
+    loadData(true);
   }, []);
 
   const loadMoreAlerts = async () => {
@@ -78,7 +93,7 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
     setLoadingMoreAlerts(true);
     try {
       const nextPage = alertsPage + 1;
-      const { results, next } = await api.apiGetAlertasPaginated(nextPage);
+      const { results, next } = await api.apiGetDashboardAlertasPaginated(nextPage);
 
       // Filtrar duplicados
       const currentIds = new Set(displayedAlerts.map(a => a.id));
@@ -200,12 +215,34 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
     closed_cases: casesArray.filter(c => c.estado === CaseStatus.CLOSED).length,
   };
 
-  if (loading) {
+  if (loading && !loadError) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto"></div>
-          <p className="mt-4 text-slate-600">Cargando dashboard...</p>
+          <p className="mt-4 text-slate-600 font-medium">Cargando dashboard...</p>
+          <p className="mt-2 text-slate-400 text-sm">Si tarda más de 1 min, el servidor puede estar despertando.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center max-w-md">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-orange-100 flex items-center justify-center">
+            <svg className="w-8 h-8 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </div>
+          <p className="text-slate-600 mb-4">{loadError}</p>
+          <button
+            onClick={loadData}
+            className="bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 px-6 rounded-xl transition-colors"
+          >
+            Reintentar
+          </button>
         </div>
       </div>
     );
@@ -337,8 +374,11 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
                   if (found) { caratula = found.caratula; codigo = found.codigo_interno; }
                 }
 
-                // Resolver caseObj para click
-                const caseObj = alerta.caseObj || (alerta.caso && typeof alerta.caso === 'number' ? cases.find(c => Number(c.id) === alerta.caso) : undefined);
+                // Resolver caseObj para click (navegación)
+                const caseId = alerta.case_id ?? (typeof alerta.caso === 'number' ? alerta.caso : null);
+                const caseObj = alerta.caseObj
+                  || (caseId ? { id: caseId, caratula, codigo_interno: codigo } as LawCase : undefined)
+                  || (alerta.caso && typeof alerta.caso === 'number' ? cases.find(c => Number(c.id) === alerta.caso) : undefined);
 
                 return (
                   <div key={alerta.id} onClick={() => caseObj && onSelectCase(caseObj)} className={`alert-card group cursor-pointer p-5 rounded-[2rem] border transition-all ${alerta.cumplida ? 'alert-completed border-slate-100' : 'bg-slate-50 border-slate-100 shadow-sm'}`}>

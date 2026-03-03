@@ -6,65 +6,59 @@ import MiniRichEditor from './MiniRichEditor';
 
 interface CaseDetailProps {
   lawCase: LawCase;
+  currentUser?: User | null;
+  templates?: ActuacionTemplate[];
+  tags?: CaseTag[];
   onUpdate: (updatedCase: LawCase) => void;
   onBack: () => void;
   onDelete: (id: string) => void;
 }
 
-const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDelete }) => {
+const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUserProp, templates: templatesProp, tags: tagsProp, onUpdate, onBack, onDelete }) => {
   const [activeTab, setActiveTab] = useState<'actuaciones' | 'alertas' | 'notas' | 'editar'>('actuaciones');
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(currentUserProp ?? null);
   const [caseData, setCaseData] = useState<LawCase>({
     ...lawCase,
     actuaciones: lawCase.actuaciones || [],
     alertas: lawCase.alertas || [],
     notas: lawCase.notas || [],
   });
+  const [isLoadingFullCase, setIsLoadingFullCase] = useState(true);
 
   useEffect(() => {
-    // 1. Carga optimista del usuario (Instant Admin UI)
-    const storedUser = api.apiGetStoredUser();
-    if (storedUser) {
-      setCurrentUser(storedUser);
+    const initialUser = currentUserProp ?? api.apiGetStoredUser();
+    if (initialUser) {
+      setCurrentUser(initialUser);
     }
 
     const loadData = async () => {
+      setIsLoadingFullCase(true);
       try {
-        // La validación del usuario ocurre en background
-        const [user, fullCase, templatesData, tagsData] = await Promise.all([
-          api.apiGetCurrentUser(),
-          api.apiGetCase(lawCase.id).catch(() => lawCase),
-          api.apiGetActuacionTemplates(),
-          api.apiGetTags()
-        ]);
-
-        // Si el usuario validado es diferente (ej: permisos cambiaron), actualizar
-        if (user && JSON.stringify(user) !== JSON.stringify(storedUser)) {
-          setCurrentUser(user);
-        }
-
-        // Asegurar que los arrays estén inicializados
+        const fullCase = await api.apiGetCase(String(lawCase.id)).catch(() => lawCase);
         setCaseData({
-          ...fullCase,
-          actuaciones: fullCase.actuaciones || [],
-          alertas: fullCase.alertas || [],
-          notas: fullCase.notas || [],
+          ...(fullCase as LawCase),
+          actuaciones: (fullCase as LawCase).actuaciones || [],
+          alertas: (fullCase as LawCase).alertas || [],
+          notas: (fullCase as LawCase).notas || [],
         });
-        setTemplates(templatesData || []);
-        setTags(tagsData || []);
       } catch (error) {
         console.error('Error al cargar datos del expediente:', error);
-        // Fallback seguro
         setCaseData({
           ...lawCase,
           actuaciones: lawCase.actuaciones || [],
           alertas: lawCase.alertas || [],
           notas: lawCase.notas || [],
         });
+      } finally {
+        setIsLoadingFullCase(false);
       }
+
+      if (!templatesProp?.length) api.apiGetActuacionTemplates().then(t => setTemplates(t || [])).catch(() => {});
+      if (!tagsProp?.length) api.apiGetTags().then(g => setTags(g || [])).catch(() => {});
+      if (!currentUserProp) api.apiGetCurrentUser().then(u => { if (u) setCurrentUser(u); }).catch(() => {});
     };
     loadData();
-  }, [lawCase.id]);
+  }, [lawCase.id, templatesProp, tagsProp]);
 
   // Estados para CRUD
   const [editingActId, setEditingActId] = useState<string | null>(null);
@@ -781,15 +775,24 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
               <div className="space-y-4">
                 {actuacionesFiltered.length === 0 ? (
                   <div className="bg-white p-12 rounded-[2rem] border border-slate-100 text-center">
-                    <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <p className="text-slate-400 font-bold text-sm">
-                      {actuacionesRaw.length === 0 ? 'No hay actuaciones registradas' : 'Ninguna actuación coincide con el filtro'}
-                    </p>
-                    <p className="text-slate-300 text-xs mt-2">
-                      {actuacionesRaw.length === 0 ? 'Agrega la primera actuación del expediente' : 'Cambia el filtro o agrega una nueva'}
-                    </p>
+                    {isLoadingFullCase && actuacionesRaw.length === 0 ? (
+                      <>
+                        <span className="animate-spin inline-block rounded-full h-10 w-10 border-2 border-orange-500 border-t-transparent mx-auto mb-4" />
+                        <p className="text-slate-500 font-bold text-sm">Cargando actuaciones...</p>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <p className="text-slate-400 font-bold text-sm">
+                          {actuacionesRaw.length === 0 ? 'No hay actuaciones registradas' : 'Ninguna actuación coincide con el filtro'}
+                        </p>
+                        <p className="text-slate-300 text-xs mt-2">
+                          {actuacionesRaw.length === 0 ? 'Agrega la primera actuación del expediente' : 'Cambia el filtro o agrega una nueva'}
+                        </p>
+                      </>
+                    )}
                   </div>
                 ) : (
                   actuacionesPaginated.map((act, idx) => (
@@ -1090,11 +1093,20 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
               <div className="space-y-4">
                 {(caseData.alertas || []).length === 0 ? (
                   <div className="bg-white p-12 rounded-[2rem] border border-slate-100 text-center">
-                    <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <p className="text-slate-400 font-bold text-sm">No hay tareas/alertas programadas</p>
-                    <p className="text-slate-300 text-xs mt-2">Agrega la primera tarea/alerta o plazo</p>
+                    {isLoadingFullCase ? (
+                      <>
+                        <span className="animate-spin inline-block rounded-full h-10 w-10 border-2 border-orange-500 border-t-transparent mx-auto mb-4" />
+                        <p className="text-slate-500 font-bold text-sm">Cargando alertas...</p>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <p className="text-slate-400 font-bold text-sm">No hay tareas/alertas programadas</p>
+                        <p className="text-slate-300 text-xs mt-2">Agrega la primera tarea/alerta o plazo</p>
+                      </>
+                    )}
                   </div>
                 ) : (
                   (caseData.alertas || []).map(al => (
@@ -1202,11 +1214,20 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
               <div className="grid grid-cols-1 gap-6">
                 {(notesRaw || []).length === 0 ? (
                   <div className="bg-white p-12 rounded-[2rem] border border-slate-100 text-center">
-                    <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <p className="text-slate-400 font-bold text-sm">No hay notas registradas</p>
-                    <p className="text-slate-300 text-xs mt-2">Agrega la primera nota estratégica</p>
+                    {isLoadingFullCase ? (
+                      <>
+                        <span className="animate-spin inline-block rounded-full h-10 w-10 border-2 border-orange-500 border-t-transparent mx-auto mb-4" />
+                        <p className="text-slate-500 font-bold text-sm">Cargando notas...</p>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <p className="text-slate-400 font-bold text-sm">No hay notas registradas</p>
+                        <p className="text-slate-300 text-xs mt-2">Agrega la primera nota estratégica</p>
+                      </>
+                    )}
                   </div>
                 ) : (
                   notesPaginated.map(note => (

@@ -9,7 +9,7 @@ import UserManagement from './components/UserManagement';
 import Login from './components/Login';
 import Toast from './components/Toast';
 import Calendar from './components/Calendar';
-import { LawCase, ViewState, User } from './types';
+import { LawCase, ViewState, User, ActuacionTemplate, CaseTag, Cliente, DashboardStats } from './types';
 import * as api from './services/apiService';
 
 interface ToastState {
@@ -26,27 +26,10 @@ const App: React.FC = () => {
   const [selectedCase, setSelectedCase] = useState<LawCase | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<ToastState | null>(null);
-
-  useEffect(() => {
-    // Verificar si hay usuario autenticado al cargar
-    const initUser = async () => {
-      try {
-        const user = await api.apiGetCurrentUser();
-        setCurrentUser(user);
-        if (user) {
-          // No bloquear la UI por la carga de expedientes
-          loadCases().catch((error) => {
-            console.error('Error al cargar casos al iniciar:', error);
-          });
-        }
-      } catch (error) {
-        console.error('Error al verificar usuario:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    initUser();
-  }, []);
+  const [templates, setTemplates] = useState<ActuacionTemplate[]>([]);
+  const [tags, setTags] = useState<CaseTag[]>([]);
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [dashboardStatsCache, setDashboardStatsCache] = useState<DashboardStats | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
@@ -58,6 +41,7 @@ const App: React.FC = () => {
       setCases(data.results ?? []);
       setCasesCount(data.count ?? 0);
       setCasesPage(page);
+      if (data.clientes && data.clientes.length > 0) setClientes(data.clientes);
     } catch (error: any) {
       console.error('Error al cargar casos:', error);
       setCases([]);
@@ -67,17 +51,52 @@ const App: React.FC = () => {
     }
   }, []);
 
+  useEffect(() => {
+    const initUser = async () => {
+      try {
+        const user = await api.apiGetCurrentUser();
+        setCurrentUser(user);
+      } catch (error) {
+        console.error('Error al verificar usuario:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    initUser();
+  }, []);
+
+  // Cargar expedientes: Calendario desde App; Expedientes lo hace CaseList (evita doble request)
+  useEffect(() => {
+    if (!currentUser) return;
+    if (currentView === 'calendar' && cases.length === 0) {
+      loadCases().catch((error) => {
+        console.error('Error al cargar expedientes:', error);
+      });
+    }
+  }, [currentUser, currentView, cases.length, loadCases]);
+
+  // Cache de templates y tags (datos estáticos, cargar una vez al tener usuario)
+  useEffect(() => {
+    if (!currentUser) return;
+    if (templates.length === 0 && tags.length === 0) {
+      Promise.all([api.apiGetActuacionTemplates(), api.apiGetTags()])
+        .then(([t, g]) => {
+          setTemplates(t || []);
+          setTags(g || []);
+        })
+        .catch(() => {});
+    }
+  }, [currentUser, templates.length, tags.length]);
+
+  // Fallback clientes: solo si loadCases no los incluyó (API antigua)
+  useEffect(() => {
+    if (!currentUser || currentView !== 'cases' || clientes.length > 0 || cases.length === 0) return;
+    api.apiGetClientes().then(setClientes).catch(() => {});
+  }, [currentUser, currentView, clientes.length, cases.length]);
+
   const handleLogin = async (user: User) => {
     setCurrentUser(user);
     setCurrentView('dashboard');
-    try {
-      // Cargar expedientes en segundo plano para mejorar UX
-      loadCases().catch((error) => {
-        console.error('Error al cargar casos después del login:', error);
-      });
-    } catch (error) {
-      console.error('Error al cargar casos después del login:', error);
-    }
   };
 
   const handleLogout = () => {
@@ -85,7 +104,22 @@ const App: React.FC = () => {
     setCurrentUser(null);
     setCases([]);
     setSelectedCase(null);
+    setTemplates([]);
+    setTags([]);
+    setClientes([]);
+    setDashboardStatsCache(null);
   };
+
+  const loadDashboard = useCallback(async () => {
+    try {
+      const stats = await api.apiGetDashboard();
+      setDashboardStatsCache(stats);
+      return stats;
+    } catch (e) {
+      console.error('Error al cargar dashboard:', e);
+      return null;
+    }
+  }, []);
 
   const handleAddCase = async (newCaseData: Omit<LawCase, 'id' | 'codigo_interno' | 'updatedAt' | 'actuaciones' | 'alertas' | 'notas' | 'createdBy' | 'lastModifiedBy' | 'created_at' | 'updated_at'>) => {
     try {
@@ -99,18 +133,12 @@ const App: React.FC = () => {
     }
   };
 
-  const handleUpdateCase = async (updatedCase: LawCase) => {
-    try {
-      const updated = await api.apiUpdateCase(String(updatedCase.id), updatedCase);
-      await loadCases();
-      if (selectedCase && String(selectedCase.id) === String(updatedCase.id)) {
-        setSelectedCase(updated);
-      }
-      showToast('Expediente actualizado exitosamente', 'success');
-    } catch (error: any) {
-      console.error('Error al actualizar caso:', error);
-      showToast(error?.message || 'Error al actualizar el expediente', 'error');
+  const handleUpdateCase = (updatedCase: LawCase) => {
+    setCases(prev => prev.map(c => String(c.id) === String(updatedCase.id) ? updatedCase : c));
+    if (selectedCase && String(selectedCase.id) === String(updatedCase.id)) {
+      setSelectedCase(updatedCase);
     }
+    showToast('Expediente actualizado exitosamente', 'success');
   };
 
   const handleDeleteCase = async (id: string | number) => {
@@ -119,7 +147,8 @@ const App: React.FC = () => {
     }
     try {
       await api.apiDeleteCase(String(id));
-      await loadCases();
+      setCases(prev => prev.filter(c => String(c.id) !== String(id)));
+      setCasesCount(prev => Math.max(0, prev - 1));
       setCurrentView('cases');
       setSelectedCase(null);
       showToast('Expediente eliminado exitosamente', 'success');
@@ -129,18 +158,9 @@ const App: React.FC = () => {
     }
   };
 
-  const navigateToCase = async (lawCase: LawCase) => {
-    try {
-      // Cargar el caso completo desde la API
-      const fullCase = await api.apiGetCase(String(lawCase.id));
-      setSelectedCase(fullCase);
-      setCurrentView('case-detail');
-    } catch (error) {
-      console.error('Error al cargar caso:', error);
-      // Si falla, usar el caso que ya tenemos
-      setSelectedCase(lawCase);
-      setCurrentView('case-detail');
-    }
+  const navigateToCase = (lawCase: LawCase) => {
+    setSelectedCase(lawCase);
+    setCurrentView('case-detail');
   };
 
   if (loading) {
@@ -161,7 +181,16 @@ const App: React.FC = () => {
   const renderView = () => {
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard cases={cases} onViewChange={setCurrentView} onSelectCase={navigateToCase} onUpdateCase={handleUpdateCase} />;
+        return (
+          <Dashboard
+            cases={cases}
+            onViewChange={setCurrentView}
+            onSelectCase={navigateToCase}
+            onUpdateCase={handleUpdateCase}
+            initialStats={dashboardStatsCache}
+            onStatsLoaded={setDashboardStatsCache}
+          />
+        );
       case 'cases':
         return (
           <CaseList
@@ -171,6 +200,8 @@ const App: React.FC = () => {
             onSelectCase={navigateToCase}
             onViewChange={setCurrentView}
             onLoadCases={loadCases}
+            clientesProp={clientes}
+            tagsProp={tags}
           />
         );
       case 'new-case':
@@ -179,6 +210,9 @@ const App: React.FC = () => {
         return selectedCase ? (
           <CaseDetail 
             lawCase={selectedCase} 
+            currentUser={currentUser}
+            templates={templates}
+            tags={tags}
             onUpdate={handleUpdateCase} 
             onBack={() => setCurrentView('cases')}
             onDelete={handleDeleteCase}
@@ -191,6 +225,8 @@ const App: React.FC = () => {
             onSelectCase={navigateToCase}
             onViewChange={setCurrentView}
             onLoadCases={loadCases}
+            clientesProp={clientes}
+            tagsProp={tags}
           />
         );
       case 'users':
@@ -198,7 +234,16 @@ const App: React.FC = () => {
       case 'calendar':
         return <Calendar cases={cases} onSelectCase={navigateToCase} onViewChange={setCurrentView} />;
       default:
-        return <Dashboard cases={cases} onViewChange={setCurrentView} onSelectCase={navigateToCase} onUpdateCase={handleUpdateCase} />;
+        return (
+          <Dashboard
+            cases={cases}
+            onViewChange={setCurrentView}
+            onSelectCase={navigateToCase}
+            onUpdateCase={handleUpdateCase}
+            initialStats={dashboardStatsCache}
+            onStatsLoaded={setDashboardStatsCache}
+          />
+        );
     }
   };
 
@@ -216,6 +261,8 @@ const App: React.FC = () => {
         onViewChange={setCurrentView} 
         onLogout={handleLogout}
         currentUser={currentUser}
+        onPreloadCases={cases.length === 0 ? () => loadCases() : undefined}
+        onPreloadDashboard={!dashboardStatsCache ? loadDashboard : undefined}
       >
         {renderView()}
       </Layout>

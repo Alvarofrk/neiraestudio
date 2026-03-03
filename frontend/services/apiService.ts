@@ -60,9 +60,9 @@ const apiRequest = async <T>(
         return retryResponse.json();
       }
     }
-    // Si el refresh falla, hacer logout
+    // Si el refresh falla, hacer logout y recargar para mostrar Login
     removeTokens();
-    window.location.href = '/';
+    window.location.replace(window.location.origin + '/');
     throw new Error('Sesión expirada. Por favor, inicia sesión nuevamente.');
   }
 
@@ -215,6 +215,7 @@ export interface CasesPaginatedResponse {
   count: number;
   next: string | null;
   previous: string | null;
+  clientes?: Cliente[];
 }
 
 export const apiGetCases = async (
@@ -234,9 +235,10 @@ export const apiGetCases = async (
   if (filters?.fecha_modificacion_desde) params.append('fecha_modificacion_desde', filters.fecha_modificacion_desde);
   if (filters?.fecha_modificacion_hasta) params.append('fecha_modificacion_hasta', filters.fecha_modificacion_hasta);
   params.append('page', String(page));
+  params.append('page_size', '15');
+  params.append('include_clientes', '1');
 
   const result = await apiRequest<any>(`/cases/?${params.toString()}`);
-  // Soportar respuesta paginada { results, count } o array directo (fallback)
   const results = Array.isArray(result?.results)
     ? result.results
     : Array.isArray(result)
@@ -245,11 +247,13 @@ export const apiGetCases = async (
         ? result.data
         : [];
   const count = typeof result?.count === 'number' ? result.count : results.length;
+  const clientes = Array.isArray(result?.clientes) ? result.clientes : undefined;
   return {
     results,
     count,
     next: result?.next ?? null,
     previous: result?.previous ?? null,
+    clientes,
   };
 };
 
@@ -424,8 +428,17 @@ export const apiDeleteUser = async (id: string): Promise<void> => {
 };
 
 // ============ DASHBOARD ============
+/** Timeout 90s para tolerar cold start de Render free tier (~30-60s) */
+const DASHBOARD_TIMEOUT_MS = 90000;
+
 export const apiGetDashboard = async (): Promise<DashboardStats> => {
-  return apiRequest<DashboardStats>('/dashboard/');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DASHBOARD_TIMEOUT_MS);
+  try {
+    return await apiRequest<DashboardStats>('/dashboard/', { signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 };
 
 // ============ EXPORTACIÓN ============
@@ -483,9 +496,11 @@ export const apiExportCaseTimeline = async (caseId: string): Promise<Blob> => {
 export const apiGetClientes = async (search?: string): Promise<Cliente[]> => {
   const params = new URLSearchParams();
   if (search) params.append('search', search);
+  params.append('page_size', '500');
   const query = params.toString() ? `?${params.toString()}` : '';
-  const result = await apiRequest<Cliente[]>(`/clientes/${query}`);
-  return Array.isArray(result) ? result : [];
+  const result = await apiRequest<any>(`/clientes/${query}`);
+  const arr = result?.results ?? result;
+  return Array.isArray(arr) ? arr : [];
 };
 
 export const apiGetCliente = async (id: string): Promise<Cliente> => {
@@ -579,7 +594,19 @@ export const apiCreateAviso = async (contenido: string): Promise<any> => {
     method: 'POST',
     body: JSON.stringify({ contenido, active: true }),
   });
-};// ============ ALERTAS ============
+};
+
+// ============ ALERTAS ============
+/** Alertas paginadas del dashboard (filtradas por expedientes del usuario). Usar para "Ver más" en Dashboard. */
+export const apiGetDashboardAlertasPaginated = async (page: number): Promise<{ results: CaseAlerta[]; next: string | null }> => {
+  const result = await apiRequest<any>(`/dashboard/alertas/?page=${page}`);
+  return {
+    results: result.results || [],
+    next: result.next,
+  };
+};
+
+/** Alertas genéricas (todas). Solo para contextos donde no aplica filtro por usuario. */
 export const apiGetAlertasPaginated = async (page: number): Promise<{ results: CaseAlerta[]; next: string | null }> => {
   const result = await apiRequest<any>(`/alertas/?page_size=5&page=${page}`);
   return {
