@@ -150,7 +150,13 @@ class LawCase(models.Model):
     estado = models.CharField(max_length=20, choices=CaseStatus.choices, default=CaseStatus.OPEN, verbose_name='Estado')
     
     # Información de partes
-    abogado_responsable = models.CharField(max_length=200, blank=True, verbose_name='Abogado Responsable')
+    abogado_responsable = models.CharField(max_length=200, blank=True, verbose_name='Abogado Responsable')  # Deprecado: migrar a abogados_asignados
+    abogados_asignados = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name='cases_assigned',
+        verbose_name='Abogados Asignados'
+    )
     cliente = models.ForeignKey(Cliente, on_delete=models.SET_NULL, null=True, blank=True, related_name='expedientes', verbose_name='Cliente')
     cliente_nombre = models.CharField(max_length=200, blank=True, verbose_name='Cliente (Texto libre)')
     cliente_dni = models.CharField(max_length=20, blank=True, verbose_name='DNI/RUC Cliente')
@@ -243,6 +249,67 @@ class CaseAlerta(models.Model):
     
     def __str__(self):
         return f"{self.titulo} - {self.caso.codigo_interno}"
+
+
+class UserStickyNote(models.Model):
+    """Notitas/recordatorios personales del usuario (no vinculados a expediente)."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sticky_notes')
+    titulo = models.CharField(max_length=200, verbose_name='Título')
+    contenido = models.TextField(blank=True, verbose_name='Contenido')
+    fecha_recordatorio = models.DateField(null=True, blank=True, verbose_name='Recordar el')
+    completada = models.BooleanField(default=False)
+    orden = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['orden', '-fecha_recordatorio', '-created_at']
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['user', 'completada']),
+        ]
+        verbose_name = 'Notita'
+        verbose_name_plural = 'Notitas'
+
+    def __str__(self):
+        return f"{self.titulo} - {self.user.username}"
+
+
+class UserCalendarEvent(models.Model):
+    """Eventos personales del calendario (reuniones, citas, recordatorios)."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='calendar_events')
+    titulo = models.CharField(max_length=200, verbose_name='Título')
+    descripcion = models.TextField(blank=True, verbose_name='Descripción')
+    fecha = models.DateField(verbose_name='Fecha')
+    hora = models.TimeField(null=True, blank=True, verbose_name='Hora')
+    tipo = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name='Tipo',
+        help_text='Ej: Reunión, Cita, Recordatorio'
+    )
+    caso = models.ForeignKey(
+        LawCase,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='user_calendar_events',
+        verbose_name='Expediente (opcional)'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['fecha', 'hora']
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['user', 'fecha']),
+        ]
+        verbose_name = 'Evento de calendario'
+        verbose_name_plural = 'Eventos de calendario'
+
+    def __str__(self):
+        return f"{self.titulo} ({self.fecha})"
 
 
 class CaseNote(models.Model):

@@ -1,4 +1,4 @@
-import { LawCase, User, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, DashboardStats } from '../types';
+import { LawCase, User, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, DashboardStats, CalendarEvent, UserStickyNote, UserCalendarEvent, Aviso } from '../types';
 
 // Normalizar para evitar dobles slashes (ej: /api//auth/login/)
 const RAW_API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -362,6 +362,12 @@ export const apiDeleteNote = async (id: string): Promise<void> => {
 };
 
 // ============ USUARIOS ============
+/** Usuarios asignables a expedientes (abogados y admins). Cualquier autenticado puede llamar. */
+export const apiGetAssignableUsers = async (): Promise<{ id: number; username: string }[]> => {
+  const data = await apiRequest<{ id: number; username: string }[]>('/assignables/');
+  return Array.isArray(data) ? data : [];
+};
+
 export const apiGetUsers = async (): Promise<User[]> => {
   const data = await apiRequest<any>('/users/');
   // El backend usa paginación: devuelve { count, next, previous, results: [...] }
@@ -425,6 +431,73 @@ export const apiDeleteUser = async (id: string): Promise<void> => {
   await apiRequest(`/users/${id}/`, {
     method: 'DELETE',
   });
+};
+
+// ============ CALENDARIO ============
+export const apiGetCalendarEvents = async (
+  desde: string,
+  hasta: string
+): Promise<CalendarEvent[]> => {
+  const params = new URLSearchParams({ desde, hasta });
+  const result = await apiRequest<{ eventos: CalendarEvent[] }>(`/calendar/events/?${params}`);
+  return Array.isArray(result?.eventos) ? result.eventos : [];
+};
+
+export const apiCreateCalendarEvent = async (
+  data: Omit<UserCalendarEvent, 'id' | 'created_at' | 'updated_at'>
+): Promise<UserCalendarEvent> => {
+  return apiRequest<UserCalendarEvent>('/calendar-events/', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+};
+
+export const apiUpdateCalendarEvent = async (
+  id: string,
+  data: Partial<UserCalendarEvent>
+): Promise<UserCalendarEvent> => {
+  return apiRequest<UserCalendarEvent>(`/calendar-events/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+};
+
+export const apiDeleteCalendarEvent = async (id: string): Promise<void> => {
+  await apiRequest(`/calendar-events/${id}/`, { method: 'DELETE' });
+};
+
+// ============ STICKY NOTES ============
+export const apiGetStickyNotes = async (): Promise<UserStickyNote[]> => {
+  const result = await apiRequest<UserStickyNote[] | { results: UserStickyNote[] }>('/sticky-notes/');
+  const arr = Array.isArray(result) ? result : result?.results;
+  return Array.isArray(arr) ? arr : [];
+};
+
+export const apiCreateStickyNote = async (
+  data: Omit<UserStickyNote, 'id' | 'created_at' | 'updated_at'>
+): Promise<UserStickyNote> => {
+  return apiRequest<UserStickyNote>('/sticky-notes/', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+};
+
+export const apiUpdateStickyNote = async (
+  id: string,
+  data: Partial<UserStickyNote>
+): Promise<UserStickyNote> => {
+  return apiRequest<UserStickyNote>(`/sticky-notes/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+};
+
+export const apiDeleteStickyNote = async (id: string): Promise<void> => {
+  await apiRequest(`/sticky-notes/${id}/`, { method: 'DELETE' });
+};
+
+export const apiToggleStickyNote = async (id: string): Promise<UserStickyNote> => {
+  return apiRequest<UserStickyNote>(`/sticky-notes/${id}/toggle_completada/`, { method: 'POST' });
 };
 
 // ============ DASHBOARD ============
@@ -589,8 +662,8 @@ export const apiDeleteActuacionTemplate = async (id: string): Promise<void> => {
   });
 };
 // ============ AVISOS ============
-export const apiCreateAviso = async (contenido: string): Promise<any> => {
-  return apiRequest('/avisos/', {
+export const apiCreateAviso = async (contenido: string): Promise<Aviso> => {
+  return apiRequest<Aviso>('/avisos/', {
     method: 'POST',
     body: JSON.stringify({ contenido, active: true }),
   });

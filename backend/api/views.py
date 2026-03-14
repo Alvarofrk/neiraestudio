@@ -1,26 +1,52 @@
 from rest_framework import viewsets, status, permissions, serializers
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.db import transaction, IntegrityError, connection
-from django.db.models import Q, Prefetch, Count
+from django.db.models import Q, Prefetch, Count, Subquery, Sum
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.http import HttpResponse
 import re
 from datetime import datetime, timedelta
 import json
 
-from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso
+from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso, UserStickyNote, UserCalendarEvent
 from .serializers import (
     UserSerializer, UserCreateSerializer, UserUpdateSerializer,
     LawCaseSerializer, LawCaseListSerializer, DashboardRecentCaseSerializer,
     CaseActuacionSerializer, CaseAlertaSerializer, DashboardAlertaSerializer,
     CaseNoteSerializer, ClienteSerializer, ClienteMinimalSerializer,
     CaseTagSerializer, ActuacionTemplateSerializer,
-    AvisoSerializer, LoginSerializer
+    AvisoSerializer, LoginSerializer,
+    CalendarEventAlertaSerializer, CalendarEventActuacionSerializer,
+    CalendarEventPersonalSerializer, UserCalendarEventSerializer,
+    UserStickyNoteSerializer
 )
+
+
+def user_has_access_to_case(user, case) -> bool:
+    """Admin ve todo; abogado solo expedientes donde está en abogados_asignados."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_admin:
+        return True
+    if getattr(user, 'rol', None) == 'abogado':
+        return case.abogados_asignados.filter(pk=user.pk).exists()
+    return False
+
+
+def _user_sees_only_own_cases(user) -> bool:
+    """True si debe filtrar por abogados_asignados (abogado, no admin)."""
+    return (
+        user
+        and user.is_authenticated
+        and getattr(user, 'rol', None) == 'abogado'
+        and not user.is_admin
+    )
 
 
 class AvisoViewSet(viewsets.ModelViewSet):
@@ -84,6 +110,15 @@ class CurrentUserView(APIView):
     
     def get(self, request):
         return Response(UserSerializer(request.user).data)
+
+
+class AssignableUsersView(APIView):
+    """Usuarios que pueden ser asignados a expedientes (abogados y admins). Cualquier autenticado puede listar."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        users = User.objects.filter(rol__in=['abogado', 'admin']).order_by('username').values('id', 'username')
+        return Response(list(users))
 
 
 class UserListPagination(PageNumberPagination):
@@ -175,7 +210,7 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         # Optimización Base: Siempre cargar relaciones directas y etiquetas (usadas en listado)
         queryset = LawCase.objects.select_related(
             'created_by', 'last_modified_by', 'cliente'
-        ).prefetch_related('etiquetas')
+        ).prefetch_related('etiquetas', 'abogados_asignados')
 
         # Optimización Condicional: Solo cargar datos pesados (actuaciones, alertas, notas) en detalle
         if self.action == 'retrieve':
@@ -188,9 +223,9 @@ class LawCaseViewSet(viewsets.ModelViewSet):
                 Prefetch('notas', queryset=CaseNote.objects.select_related('created_by').order_by('-created_at'))
             )
         
-        # Abogados solo ven expedientes donde están asignados como responsable (por username)
-        if self.request.user.is_authenticated and getattr(self.request.user, 'rol', None) == 'abogado' and not self.request.user.is_admin:
-            queryset = queryset.filter(abogado_responsable=self.request.user.username)
+        # Abogados solo ven expedientes donde están asignados
+        if _user_sees_only_own_cases(self.request.user):
+            queryset = queryset.filter(abogados_asignados=self.request.user)
         
         # Filtros avanzados
         search = self.request.query_params.get('search', None)
@@ -219,7 +254,7 @@ class LawCaseViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(estado=estado)
         
         if abogado:
-            queryset = queryset.filter(abogado_responsable__icontains=abogado)
+            queryset = queryset.filter(abogados_asignados__username__icontains=abogado)
         
         if fuero:
             queryset = queryset.filter(fuero=fuero)
@@ -245,7 +280,7 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         if fecha_modificacion_hasta:
             queryset = queryset.filter(updated_at__lte=fecha_modificacion_hasta)
         
-        return queryset.distinct() if etiqueta_id else queryset
+        return queryset.distinct()
 
     def list(self, request, *args, **kwargs):
         """Lista expedientes. Con ?include_clientes=1 devuelve clientes en la misma respuesta (1 round-trip menos)."""
@@ -346,7 +381,7 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         # Encabezados
         headers = [
             "Código Interno", "Carátula", "Nro. Expediente", "Juzgado", "Fuero",
-            "Estado", "Cliente", "DNI/RUC", "Abogado Responsable", "Contraparte",
+            "Estado", "Cliente", "DNI/RUC", "Abogados Asignados", "Contraparte",
             "Fecha Inicio", "Última Modificación", "Creado por", "Modificado por"
         ]
         
@@ -355,12 +390,21 @@ class LawCaseViewSet(viewsets.ModelViewSet):
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = center_alignment
+
+        # Mapa caso_id -> "user1, user2" (iterator no aplica prefetch)
+        case_ids = list(queryset.values_list('id', flat=True))
+        abogados_map = {}
+        if case_ids:
+            through = LawCase.abogados_asignados.through
+            for m2m in through.objects.filter(lawcase_id__in=case_ids).select_related('user'):
+                abogados_map.setdefault(m2m.lawcase_id, []).append(m2m.user.username)
+            abogados_map = {k: ', '.join(v) for k, v in abogados_map.items()}
         
-        # Datos: iterator() evita cargar todo en memoria; select_related ya aplicado en get_queryset
         row_num = 2
         for caso in queryset.iterator(chunk_size=500):
             cliente_nombre = caso.cliente.nombre_completo if caso.cliente else caso.cliente_nombre
             cliente_dni = caso.cliente.dni_ruc if caso.cliente else caso.cliente_dni
+            abogados_str = abogados_map.get(caso.id, '')
             
             ws.cell(row=row_num, column=1, value=caso.codigo_interno)
             ws.cell(row=row_num, column=2, value=caso.caratula)
@@ -370,7 +414,7 @@ class LawCaseViewSet(viewsets.ModelViewSet):
             ws.cell(row=row_num, column=6, value=caso.estado)
             ws.cell(row=row_num, column=7, value=cliente_nombre)
             ws.cell(row=row_num, column=8, value=cliente_dni)
-            ws.cell(row=row_num, column=9, value=caso.abogado_responsable)
+            ws.cell(row=row_num, column=9, value=abogados_str)
             ws.cell(row=row_num, column=10, value=caso.contraparte)
             ws.cell(row=row_num, column=11, value=caso.fecha_inicio.strftime('%Y-%m-%d') if caso.fecha_inicio else '')
             ws.cell(row=row_num, column=12, value=caso.updated_at.strftime('%Y-%m-%d %H:%M') if caso.updated_at else '')
@@ -507,35 +551,55 @@ class LawCaseViewSet(viewsets.ModelViewSet):
 
 
 class CaseActuacionViewSet(viewsets.ModelViewSet):
-    """ViewSet para actuaciones"""
+    """ViewSet para actuaciones. Abogados solo ven/modifican actuaciones de sus expedientes."""
     queryset = CaseActuacion.objects.select_related('caso', 'created_by', 'last_modified_by')
     serializer_class = CaseActuacionSerializer
     permission_classes = [permissions.IsAuthenticated]
-    
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
-    
-    def perform_update(self, serializer):
-        serializer.save(last_modified_by=self.request.user)
-    
+
     def get_queryset(self):
         queryset = super().get_queryset()
-        caso_id = self.request.query_params.get('caso', None)
+        if _user_sees_only_own_cases(self.request.user):
+            queryset = queryset.filter(caso__abogados_asignados=self.request.user)
+        caso_id = self.request.query_params.get('caso')
         if caso_id:
             queryset = queryset.filter(caso_id=caso_id)
         return queryset
 
+    def perform_create(self, serializer):
+        caso = serializer.validated_data.get('caso')
+        if caso and not user_has_access_to_case(self.request.user, caso):
+            raise PermissionDenied("No tienes acceso a este expediente.")
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(last_modified_by=self.request.user)
+
 
 class CaseAlertaViewSet(viewsets.ModelViewSet):
-    """ViewSet para alertas"""
+    """ViewSet para alertas. Abogados solo ven/modifican alertas de sus expedientes."""
     queryset = CaseAlerta.objects.select_related('caso', 'created_by', 'completed_by')
     serializer_class = CaseAlertaSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = CaseListPagination
-    
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if _user_sees_only_own_cases(self.request.user):
+            queryset = queryset.filter(caso__abogados_asignados=self.request.user)
+        caso_id = self.request.query_params.get('caso')
+        cumplida = self.request.query_params.get('cumplida')
+        if caso_id:
+            queryset = queryset.filter(caso_id=caso_id)
+        if cumplida is not None:
+            queryset = queryset.filter(cumplida=cumplida.lower() == 'true')
+        return queryset
+
     def perform_create(self, serializer):
+        caso = serializer.validated_data.get('caso')
+        if caso and not user_has_access_to_case(self.request.user, caso):
+            raise PermissionDenied("No tienes acceso a este expediente.")
         serializer.save(created_by=self.request.user)
-    
+
     @action(detail=True, methods=['post'])
     def toggle_cumplida(self, request, pk=None):
         """Toggle estado cumplida de alerta"""
@@ -549,33 +613,75 @@ class CaseAlertaViewSet(viewsets.ModelViewSet):
             alerta.completed_at = None
         alerta.save()
         return Response(self.get_serializer(alerta).data)
-    
+
+
+class UserStickyNoteViewSet(viewsets.ModelViewSet):
+    """ViewSet para notitas/recordatorios personales. Solo las del usuario autenticado."""
+    serializer_class = UserStickyNoteSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
     def get_queryset(self):
-        queryset = super().get_queryset()
-        caso_id = self.request.query_params.get('caso', None)
-        cumplida = self.request.query_params.get('cumplida', None)
-        if caso_id:
-            queryset = queryset.filter(caso_id=caso_id)
-        if cumplida is not None:
-            queryset = queryset.filter(cumplida=cumplida.lower() == 'true')
-        return queryset
+        return UserStickyNote.objects.filter(user=self.request.user).order_by(
+            'orden', '-fecha_recordatorio', '-created_at'
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def toggle_completada(self, request, pk=None):
+        """Toggle estado completada de la notita."""
+        note = self.get_object()
+        note.completada = not note.completada
+        note.save()
+        return Response(self.get_serializer(note).data)
+
+
+class UserCalendarEventViewSet(viewsets.ModelViewSet):
+    """ViewSet para eventos personales del calendario. Solo los del usuario autenticado."""
+    serializer_class = UserCalendarEventSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return (
+            UserCalendarEvent.objects.filter(user=self.request.user)
+            .select_related('caso')
+            .order_by('fecha', 'hora')
+        )
+
+    def perform_create(self, serializer):
+        caso = serializer.validated_data.get('caso')
+        if caso and not user_has_access_to_case(self.request.user, caso):
+            raise PermissionDenied("No tienes acceso a este expediente.")
+        serializer.save(user=self.request.user)
+
+    def perform_update(self, serializer):
+        caso = serializer.validated_data.get('caso')
+        if caso and not user_has_access_to_case(self.request.user, caso):
+            raise PermissionDenied("No tienes acceso a este expediente.")
+        serializer.save()
 
 
 class CaseNoteViewSet(viewsets.ModelViewSet):
-    """ViewSet para notas"""
+    """ViewSet para notas. Abogados solo ven/modifican notas de sus expedientes."""
     queryset = CaseNote.objects.select_related('caso', 'created_by')
     serializer_class = CaseNoteSerializer
     permission_classes = [permissions.IsAuthenticated]
-    
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
-    
+
     def get_queryset(self):
         queryset = super().get_queryset()
-        caso_id = self.request.query_params.get('caso', None)
+        if _user_sees_only_own_cases(self.request.user):
+            queryset = queryset.filter(caso__abogados_asignados=self.request.user)
+        caso_id = self.request.query_params.get('caso')
         if caso_id:
             queryset = queryset.filter(caso_id=caso_id)
         return queryset
+
+    def perform_create(self, serializer):
+        caso = serializer.validated_data.get('caso')
+        if caso and not user_has_access_to_case(self.request.user, caso):
+            raise PermissionDenied("No tienes acceso a este expediente.")
+        serializer.save(created_by=self.request.user)
 
 
 class ClienteListPagination(PageNumberPagination):
@@ -642,12 +748,11 @@ class DashboardView(APIView):
 
     @staticmethod
     def _get_cases_queryset_for_user(request):
-        """Queryset base de expedientes según rol: admin ve todos, abogado solo los asignados.
-        Usa igualdad exacta (no icontains) para aprovechar índice en abogado_responsable."""
+        """Queryset base de expedientes según rol: admin ve todos, abogado solo los asignados."""
         if request.user.is_admin:
             return LawCase.objects.all().order_by('-updated_at')
         return LawCase.objects.filter(
-            abogado_responsable=request.user.username
+            abogados_asignados=request.user
         ).order_by('-updated_at')
     
     def get(self, request):
@@ -671,66 +776,46 @@ class DashboardView(APIView):
         ultimo_aviso = Aviso.objects.filter(active=True).select_related('created_by').order_by('-created_at').first()
         aviso_data = AvisoSerializer(ultimo_aviso).data if ultimo_aviso else None
 
-        # ---- 1 query raw (PostgreSQL): stats+fuero+abogado+meses en 1 round-trip ----
+        # ---- Stats vía ORM (compatible con abogados_asignados M2M) ----
         cases = self._get_cases_queryset_for_user(request)
-        if connection.vendor == 'postgresql':
-            if request.user.is_admin:
-                where_sql, params = "1=1", [start_12m]
-            else:
-                where_sql, params = "abogado_responsable = %s", [request.user.username, start_12m]
-            with connection.cursor() as cursor:
-                cursor.execute(f"""
-                    WITH base AS (
-                        SELECT id, estado, fuero, abogado_responsable, date_trunc('month', created_at)::date as mes
-                        FROM api_lawcase WHERE {where_sql}
-                    )
-                    SELECT
-                        (SELECT COUNT(*) FROM base) as total,
-                        (SELECT COUNT(*) FROM base WHERE estado = 'Abierto') as open_cases,
-                        (SELECT COUNT(*) FROM base WHERE estado = 'En Trámite') as in_progress_cases,
-                        (SELECT COUNT(*) FROM base WHERE estado = 'Pausado') as paused_cases,
-                        (SELECT COUNT(*) FROM base WHERE estado = 'Cerrado') as closed_cases,
-                        (SELECT COALESCE(jsonb_object_agg(fuero, cnt), '{{}}'::jsonb) FROM (
-                            SELECT fuero, COUNT(*)::int as cnt FROM base GROUP BY fuero
-                        ) f) as fuero_json,
-                        (SELECT COALESCE(jsonb_object_agg(abogado_responsable, cnt), '{{}}'::jsonb) FROM (
-                            SELECT abogado_responsable, COUNT(*)::int as cnt
-                            FROM base WHERE abogado_responsable != '' GROUP BY abogado_responsable
-                        ) a) as abogado_json,
-                        (SELECT COALESCE(jsonb_object_agg(to_char(mes, 'YYYY-MM'), cnt), '{{}}'::jsonb) FROM (
-                            SELECT mes, COUNT(*)::int as cnt FROM base WHERE mes >= %s GROUP BY mes
-                        ) m) as month_json
-                    FROM (SELECT 1) x
-                """, params)
-                row = cursor.fetchone()
-            total, open_c, in_prog, paused, closed = row[0] or 0, row[1] or 0, row[2] or 0, row[3] or 0, row[4] or 0
-            def _to_dict(v):
-                if v is None: return {}
-                if isinstance(v, dict): return v
-                return json.loads(v) if isinstance(v, str) else {}
-            fuero_json = _to_dict(row[5])
-            abogado_json = _to_dict(row[6])
-            month_json = _to_dict(row[7])
-        else:
-            # SQLite fallback: ORM (4 queries)
-            stats_agg = cases.aggregate(
-                total=Count('id'),
-                open_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.OPEN)),
-                in_progress_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.IN_PROGRESS)),
-                paused_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.PAUSED)),
-                closed_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.CLOSED)),
-            )
-            total = stats_agg['total'] or 0
-            open_c = stats_agg['open_cases'] or 0
-            in_prog = stats_agg['in_progress_cases'] or 0
-            paused = stats_agg['paused_cases'] or 0
-            closed = stats_agg['closed_cases'] or 0
-            fuero_json = dict(cases.values('fuero').annotate(cnt=Count('id')).values_list('fuero', 'cnt'))
-            abogado_json = dict(cases.exclude(abogado_responsable='').values('abogado_responsable').annotate(cnt=Count('id')).values_list('abogado_responsable', 'cnt'))
-            month_rows = cases.filter(created_at__gte=start_12m).annotate(mes=TruncMonth('created_at')).values('mes').annotate(cnt=Count('id'))
-            month_json = {r['mes'].strftime('%Y-%m'): r['cnt'] for r in month_rows if r['mes']}
+        stats_agg = cases.aggregate(
+            total=Count('id'),
+            open_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.OPEN)),
+            closed_cases=Count('id', filter=Q(estado=LawCase.CaseStatus.CLOSED)),
+        )
+        total = stats_agg['total'] or 0
+        open_c = stats_agg['open_cases'] or 0
+        closed = stats_agg['closed_cases'] or 0
+        fuero_json = dict(cases.values('fuero').annotate(cnt=Count('id')).values_list('fuero', 'cnt'))
+        # Stats por abogado: usar Subquery para evitar materializar lista de IDs (escalable con muchos casos)
+        cases_subquery_ids = cases.only('id').order_by().values('id')
+        abogado_rows = (
+            LawCase.abogados_asignados.through.objects
+            .filter(lawcase_id__in=Subquery(cases_subquery_ids))
+            .values('user__username')
+            .annotate(cnt=Count('id'))
+            .values_list('user__username', 'cnt')
+        )
+        abogado_json = dict(abogado_rows)
+        month_rows = cases.filter(created_at__gte=start_12m).annotate(mes=TruncMonth('created_at')).values('mes').annotate(cnt=Count('id'))
+        month_json = {r['mes'].strftime('%Y-%m'): r['cnt'] for r in month_rows if r['mes']}
 
-        stats = {'total_cases': total, 'open_cases': open_c, 'in_progress_cases': in_prog, 'paused_cases': paused, 'closed_cases': closed}
+        # ---- Horas trabajadas: sumar tiempo_estimado_minutos de alertas ----
+        alertas_base = CaseAlerta.objects.filter(caso_id__in=Subquery(cases_subquery_ids))
+        horas_cumplidas = alertas_base.filter(cumplida=True).aggregate(
+            t=Coalesce(Sum('tiempo_estimado_minutos'), 0)
+        )['t'] or 0
+        horas_totales = alertas_base.aggregate(
+            t=Coalesce(Sum('tiempo_estimado_minutos'), 0)
+        )['t'] or 0
+
+        stats = {
+            'total_cases': total,
+            'open_cases': open_c,
+            'closed_cases': closed,
+            'horas_trabajadas_cumplidas_minutos': int(horas_cumplidas),
+            'horas_trabajadas_total_minutos': int(horas_totales),
+        }
         stats_by_fuero = {f: int(fuero_json.get(f, 0)) for f in fuero_order}
         stats_by_abogado = {k: int(v) for k, v in (abogado_json.items() if abogado_json else [])}
         cases_by_month = [
@@ -738,11 +823,9 @@ class DashboardView(APIView):
             for i in range(11, -1, -1)
         ]
 
-        # ---- Alertas: subquery sin ORDER BY (más eficiente que IN con miles de IDs) ----
-        cases_subquery = cases.only('id').order_by()
+        # ---- Alertas: top 5 para dashboard ----
         alertas_qs = (
-            CaseAlerta.objects.filter(caso__in=cases_subquery)
-            .select_related('caso', 'created_by', 'completed_by')
+            alertas_base.select_related('caso', 'created_by', 'completed_by')
             .order_by('cumplida', 'fecha_vencimiento')
         )[:5]
         alertas_data = DashboardAlertaSerializer(alertas_qs, many=True).data
@@ -753,6 +836,12 @@ class DashboardView(APIView):
             .select_related('last_modified_by')
         )[:5]
 
+        # Sticky notes del usuario (evita petición separada desde el frontend)
+        sticky_notes_qs = UserStickyNote.objects.filter(user=request.user).order_by(
+            'orden', '-fecha_recordatorio', '-created_at'
+        )
+        sticky_notes_data = UserStickyNoteSerializer(sticky_notes_qs, many=True).data
+
         data = {
             'stats': stats,
             'recent_cases': DashboardRecentCaseSerializer(recent_cases, many=True).data,
@@ -760,9 +849,77 @@ class DashboardView(APIView):
             'cases_by_month': cases_by_month,
             'stats_by_fuero': stats_by_fuero,
             'stats_by_abogado': stats_by_abogado,
-            'aviso': aviso_data
+            'aviso': aviso_data,
+            'sticky_notes': sticky_notes_data,
         }
         return Response(data)
+
+
+class CalendarEventsView(APIView):
+    """Eventos de calendario (alertas + actuaciones) en rango de fechas.
+    Solo expedientes accesibles al usuario. ORM puro, sin raw SQL."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        desde = request.query_params.get('desde')
+        hasta = request.query_params.get('hasta')
+        if not desde or not hasta:
+            return Response(
+                {'detail': 'Se requieren parámetros desde y hasta (YYYY-MM-DD)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            desde_dt = datetime.strptime(desde, '%Y-%m-%d').date()
+            hasta_dt = datetime.strptime(hasta, '%Y-%m-%d').date()
+        except ValueError:
+            return Response(
+                {'detail': 'Fechas deben estar en formato YYYY-MM-DD'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if desde_dt > hasta_dt:
+            return Response(
+                {'detail': 'desde no puede ser mayor que hasta'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        cases = DashboardView._get_cases_queryset_for_user(request)
+        cases_subquery = cases.only('id').order_by().values('id')
+
+        # Alertas: usar Subquery para escalar con muchos expedientes
+        alertas_qs = (
+            CaseAlerta.objects.filter(caso_id__in=Subquery(cases_subquery))
+            .filter(fecha_vencimiento__gte=desde_dt, fecha_vencimiento__lte=hasta_dt)
+            .select_related('caso')
+            .order_by('fecha_vencimiento', 'hora')
+        )
+        alertas_data = CalendarEventAlertaSerializer(alertas_qs, many=True).data
+
+        # Actuaciones: fecha en rango (Subquery para consistencia)
+        actuaciones_qs = (
+            CaseActuacion.objects.filter(caso_id__in=Subquery(cases_subquery))
+            .filter(fecha__gte=desde_dt, fecha__lte=hasta_dt)
+            .select_related('caso')
+            .order_by('fecha')
+        )
+        actuaciones_data = CalendarEventActuacionSerializer(actuaciones_qs, many=True).data
+
+        # Eventos personales del usuario
+        personales_qs = (
+            UserCalendarEvent.objects.filter(user=request.user)
+            .filter(fecha__gte=desde_dt, fecha__lte=hasta_dt)
+            .select_related('caso')
+            .order_by('fecha', 'hora')
+        )
+        personales_data = CalendarEventPersonalSerializer(personales_qs, many=True).data
+
+        eventos = list(alertas_data) + list(actuaciones_data) + list(personales_data)
+        def _sort_key(e):
+            f = e.get('fecha') or e.get('fecha_vencimiento') or ''
+            h = str(e.get('hora') or '')
+            return (str(f), h)
+        eventos.sort(key=_sort_key)
+
+        return Response({'eventos': eventos})
 
 
 class DashboardAlertasView(APIView):

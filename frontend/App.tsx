@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
 import CaseList from './components/CaseList';
@@ -110,6 +109,8 @@ const App: React.FC = () => {
     setDashboardStatsCache(null);
   };
 
+  const preloadDashboardInProgress = useRef(false);
+
   const loadDashboard = useCallback(async () => {
     try {
       const stats = await api.apiGetDashboard();
@@ -118,8 +119,30 @@ const App: React.FC = () => {
     } catch (e) {
       console.error('Error al cargar dashboard:', e);
       return null;
+    } finally {
+      preloadDashboardInProgress.current = false;
     }
   }, []);
+
+  const safePreloadDashboard = useCallback(() => {
+    if (dashboardStatsCache) return;
+    if (preloadDashboardInProgress.current) return;
+    preloadDashboardInProgress.current = true;
+    loadDashboard();
+  }, [dashboardStatsCache, loadDashboard]);
+
+  const preloadCasesInProgress = useRef(false);
+
+  const safePreloadCases = useCallback(() => {
+    if (cases.length > 0) return;
+    if (preloadCasesInProgress.current) return;
+    preloadCasesInProgress.current = true;
+    loadCases()
+      .catch(() => {})
+      .finally(() => {
+        preloadCasesInProgress.current = false;
+      });
+  }, [cases.length, loadCases]);
 
   const handleAddCase = async (newCaseData: Omit<LawCase, 'id' | 'codigo_interno' | 'updatedAt' | 'actuaciones' | 'alertas' | 'notas' | 'createdBy' | 'lastModifiedBy' | 'created_at' | 'updated_at'>) => {
     try {
@@ -208,14 +231,15 @@ const App: React.FC = () => {
         return <CaseForm onAdd={handleAddCase} onCancel={() => setCurrentView('cases')} currentUser={currentUser} />;
       case 'case-detail':
         return selectedCase ? (
-          <CaseDetail 
-            lawCase={selectedCase} 
+          <CaseDetail
+            lawCase={selectedCase}
             currentUser={currentUser}
             templates={templates}
             tags={tags}
-            onUpdate={handleUpdateCase} 
+            onUpdate={handleUpdateCase}
             onBack={() => setCurrentView('cases')}
             onDelete={handleDeleteCase}
+            onEditSaved={() => showToast('Cambios guardados', 'success')}
           />
         ) : (
           <CaseList
@@ -261,8 +285,8 @@ const App: React.FC = () => {
         onViewChange={setCurrentView} 
         onLogout={handleLogout}
         currentUser={currentUser}
-        onPreloadCases={cases.length === 0 ? () => loadCases() : undefined}
-        onPreloadDashboard={!dashboardStatsCache ? loadDashboard : undefined}
+        onPreloadCases={cases.length === 0 ? safePreloadCases : undefined}
+        onPreloadDashboard={!dashboardStatsCache ? safePreloadDashboard : undefined}
       >
         {renderView()}
       </Layout>

@@ -108,6 +108,11 @@ export interface ActuacionTemplate {
   updated_at?: string;
 }
 
+export interface AbogadoAsignado {
+  id: number;
+  username: string;
+}
+
 export interface LawCase {
   id: string;
   codigo_interno: string;
@@ -116,7 +121,9 @@ export interface LawCase {
   juzgado: string;
   fuero: string;
   estado: CaseStatus;
-  abogado_responsable: string;
+  abogado_responsable?: string; // Deprecado: usar abogados_asignados
+  abogados_asignados?: AbogadoAsignado[];
+  abogados_asignados_ids?: (string | number)[];
   folder_link?: string;
   cliente?: Cliente;
   cliente_id?: string | number;
@@ -152,9 +159,9 @@ export interface DashboardStats {
   stats: {
     total_cases: number;
     open_cases: number;
-    in_progress_cases: number;
-    paused_cases: number;
     closed_cases: number;
+    horas_trabajadas_cumplidas_minutos: number;
+    horas_trabajadas_total_minutos: number;
   };
   stats_by_fuero: Record<string, number>;
   stats_by_abogado: Record<string, number>;
@@ -162,6 +169,83 @@ export interface DashboardStats {
   recent_cases: LawCase[];
   alertas: CaseAlerta[];
   aviso?: Aviso;
+  sticky_notes?: UserStickyNote[];
 }
 
 export type ViewState = 'dashboard' | 'cases' | 'new-case' | 'case-detail' | 'users' | 'calendar' | 'clientes';
+
+// Eventos de calendario (alertas, actuaciones, personales)
+export type CalendarEventKind = 'alerta' | 'actuacion' | 'personal';
+
+export interface CalendarEventCase {
+  id: number | string;
+  codigo_interno: string;
+  caratula: string;
+}
+
+export interface CalendarEventAlerta {
+  kind: 'alerta';
+  id: string;
+  titulo: string;
+  resumen?: string;
+  fecha: string;
+  fecha_vencimiento: string;
+  hora?: string | null;
+  caratula?: string;
+  codigo_interno?: string;
+  prioridad?: string;
+  cumplida?: boolean;
+  case?: CalendarEventCase;
+}
+
+export interface CalendarEventActuacion {
+  kind: 'actuacion';
+  id: string;
+  titulo: string;
+  descripcion?: string;
+  tipo?: string;
+  fecha: string;
+  fecha_vencimiento?: string;
+  caratula?: string;
+  codigo_interno?: string;
+  case?: CalendarEventCase;
+}
+
+export interface CalendarEventPersonal {
+  kind: 'personal';
+  id: string;
+  titulo: string;
+  descripcion?: string;
+  tipo?: string;
+  fecha: string;
+  fecha_vencimiento?: string;
+  hora?: string | null;
+  caratula?: string;
+  codigo_interno?: string;
+  case?: CalendarEventCase | null;
+}
+
+export type CalendarEvent = CalendarEventAlerta | CalendarEventActuacion | CalendarEventPersonal;
+
+export interface UserCalendarEvent {
+  id: string;
+  titulo: string;
+  descripcion?: string;
+  fecha: string;
+  hora?: string | null;
+  tipo?: string;
+  caso?: string | number | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface UserStickyNote {
+  id: string;
+  titulo: string;
+  contenido?: string;
+  fecha_recordatorio?: string | null;
+  completada: boolean;
+  orden: number;
+  created_at?: string;
+  updated_at?: string;
+}

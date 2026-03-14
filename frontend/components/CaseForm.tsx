@@ -13,8 +13,7 @@ interface CaseFormProps {
 }
 
 const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => {
-  const isAdmin = currentUser?.isAdmin || currentUser?.is_admin || false;
-  const [abogados, setAbogados] = useState<User[]>([]);
+  const [abogados, setAbogados] = useState<{ id: number; username: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     caratula: '',
@@ -23,19 +22,15 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => 
     fuero: 'Civil',
     fueroOtro: '',
     estado: CaseStatus.OPEN,
-    abogado_responsable: '',
+    abogados_asignados_ids: [] as (string | number)[],
     cliente_nombre: '',
     cliente_dni: '',
     contraparte: ''
   });
 
   useEffect(() => {
-    if (!isAdmin) return;
-    api.apiGetUsers().then((users) => {
-      const abogadosList = users.filter((u) => u.rol === 'abogado');
-      setAbogados(abogadosList);
-    }).catch(() => setAbogados([]));
-  }, [isAdmin]);
+    api.apiGetAssignableUsers().then(setAbogados).catch(() => setAbogados([]));
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,7 +47,8 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => 
       const newCaseData: NewCaseInput = {
         ...rest,
         fuero: fueroFinal,
-        fecha_inicio: new Date().toISOString().split('T')[0] // Formato YYYY-MM-DD
+        abogados_asignados_ids: formData.abogados_asignados_ids,
+        fecha_inicio: new Date().toISOString().split('T')[0]
       };
       await onAdd(newCaseData);
     } catch (error) {
@@ -116,23 +112,31 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => 
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-              Abogado Responsable
-              {!isAdmin && <span className="text-[8px] text-slate-300 ml-2">(Solo Admin)</span>}
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">
+              Abogados asignados
             </label>
-            <select
-              className={`w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-              value={formData.abogado_responsable}
-              onChange={(e) => {
-                if (isAdmin) setFormData({...formData, abogado_responsable: e.target.value});
-              }}
-              disabled={!isAdmin}
-            >
-              <option value="">Sin asignar</option>
-              {abogados.map((u) => (
-                <option key={String(u.id)} value={u.username}>{u.username}</option>
-              ))}
-            </select>
+            <div className="max-h-48 overflow-y-auto border border-slate-100 rounded-xl p-4 bg-slate-50 space-y-1">
+              {abogados.length === 0 ? (
+                <p className="text-sm text-slate-400">No hay abogados disponibles</p>
+              ) : (
+                abogados.map((u) => (
+                  <label key={u.id} className="flex items-center gap-3 cursor-pointer hover:bg-slate-100 rounded-lg px-3 py-2 -mx-1 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={formData.abogados_asignados_ids.includes(u.id)}
+                      onChange={(e) => {
+                        const ids = e.target.checked
+                          ? [...formData.abogados_asignados_ids, u.id]
+                          : formData.abogados_asignados_ids.filter((id) => id !== u.id);
+                        setFormData({ ...formData, abogados_asignados_ids: ids });
+                      }}
+                      className="rounded border-slate-300 text-orange-500 focus:ring-orange-500"
+                    />
+                    <span className="text-sm font-bold text-slate-700">{u.username}</span>
+                  </label>
+                ))
+              )}
+            </div>
           </div>
 
           <div className="space-y-1">

@@ -12,9 +12,10 @@ interface CaseDetailProps {
   onUpdate: (updatedCase: LawCase) => void;
   onBack: () => void;
   onDelete: (id: string) => void;
+  onEditSaved?: () => void;
 }
 
-const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUserProp, templates: templatesProp, tags: tagsProp, onUpdate, onBack, onDelete }) => {
+const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUserProp, templates: templatesProp, tags: tagsProp, onUpdate, onBack, onDelete, onEditSaved }) => {
   const [activeTab, setActiveTab] = useState<'actuaciones' | 'alertas' | 'notas' | 'editar'>('actuaciones');
   const [currentUser, setCurrentUser] = useState<User | null>(currentUserProp ?? null);
   const [caseData, setCaseData] = useState<LawCase>({
@@ -77,7 +78,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUs
   const [templates, setTemplates] = useState<ActuacionTemplate[]>([]);
   const [tags, setTags] = useState<CaseTag[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>('');
-  const [abogados, setAbogados] = useState<User[]>([]);
+  const [abogados, setAbogados] = useState<{ id: number; username: string }[]>([]);
   const [actuacionFilterTipo, setActuacionFilterTipo] = useState<string>('');
   const [actuacionOrder, setActuacionOrder] = useState<'desc' | 'asc'>('desc');
   const [actuacionPage, setActuacionPage] = useState(1);
@@ -122,16 +123,94 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUs
   const tiposActuacion = Array.from(new Set(actuacionesRaw.map((a) => a.tipo).filter(Boolean))) as string[];
 
   useEffect(() => {
-    // Cargar lista de abogados solo si es admin (optimización)
-    if (isAdmin) {
-      api.apiGetUsers().then((users) => {
-        // Verificar si el componente sigue montado (cleanup safety si fuera class, acá es effect)
-        setAbogados(users.filter((u) => u.rol === 'abogado'));
-      }).catch(() => setAbogados([]));
-    }
-  }, [isAdmin]);
+    api.apiGetAssignableUsers().then(setAbogados).catch(() => setAbogados([]));
+  }, []);
 
-  // --- LOGICA DE ACTUALIZACIÓN CENTRAL ---
+  // --- BORRADOR DE EDICIÓN (pestaña Editar) ---
+  type EditDraft = {
+    caratula: string;
+    nro_expediente: string;
+    juzgado: string;
+    contraparte: string;
+    abogados_asignados_ids: (string | number)[];
+    cliente_nombre: string;
+    cliente_dni: string;
+    fuero: string;
+    estado: string;
+  };
+
+  const getEditDraftFromCase = (c: LawCase): EditDraft => ({
+    caratula: c.caratula || '',
+    nro_expediente: c.nro_expediente || '',
+    juzgado: c.juzgado || '',
+    contraparte: c.contraparte || '',
+    abogados_asignados_ids: c.abogados_asignados_ids ?? c.abogados_asignados?.map((a) => a.id) ?? [],
+    cliente_nombre: c.cliente_nombre || '',
+    cliente_dni: c.cliente_dni || '',
+    fuero: c.fuero || '',
+    estado: c.estado || '',
+  });
+
+  const [editDraft, setEditDraft] = useState<EditDraft>(() => getEditDraftFromCase(lawCase));
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === 'editar') {
+      setEditDraft(getEditDraftFromCase(caseData));
+    }
+  }, [caseData.id, activeTab]);
+
+  const handleSaveEdit = async () => {
+    if (!caseData.id || isSavingEdit) return;
+    setIsSavingEdit(true);
+    try {
+      const payload: Partial<LawCase> = {
+        caratula: editDraft.caratula,
+        nro_expediente: editDraft.nro_expediente,
+        juzgado: editDraft.juzgado,
+        contraparte: editDraft.contraparte,
+        abogados_asignados_ids: editDraft.abogados_asignados_ids,
+        cliente_nombre: editDraft.cliente_nombre,
+        cliente_dni: editDraft.cliente_dni,
+        fuero: editDraft.fuero,
+        estado: editDraft.estado,
+      };
+      const updated = await api.apiUpdateCase(String(caseData.id), payload);
+      setCaseData(updated);
+      onUpdate(updated);
+      setEditDraft(getEditDraftFromCase(updated));
+      onEditSaved?.();
+    } catch (error) {
+      console.error('Error al guardar:', error);
+      alert('Error al guardar. Por favor, intenta nuevamente.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditDraft(getEditDraftFromCase(caseData));
+  };
+
+  const hasEditChanges = (): boolean => {
+    const c = caseData;
+    const d = editDraft;
+    const currentIds = (c.abogados_asignados_ids ?? c.abogados_asignados?.map((a) => a.id) ?? []).map(String).sort().join(',');
+    const draftIds = (d.abogados_asignados_ids ?? []).map(String).sort().join(',');
+    return (
+      d.caratula !== (c.caratula || '') ||
+      d.nro_expediente !== (c.nro_expediente || '') ||
+      d.juzgado !== (c.juzgado || '') ||
+      d.contraparte !== (c.contraparte || '') ||
+      d.cliente_nombre !== (c.cliente_nombre || '') ||
+      d.cliente_dni !== (c.cliente_dni || '') ||
+      d.fuero !== (c.fuero || '') ||
+      d.estado !== (c.estado || '') ||
+      draftIds !== currentIds
+    );
+  };
+
+  // --- LOGICA DE ACTUALIZACIÓN CENTRAL (panel izquierdo: estado, etiquetas) ---
   const handleUpdateField = async (field: keyof LawCase, value: any) => {
     const previousValue = caseData[field as keyof LawCase];
     setCaseData((prev) => ({ ...prev, [field]: value }));
@@ -610,7 +689,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUs
             )}
 
             {[
-              { label: 'Responsable', value: caseData.abogado_responsable },
+              { label: 'Abogados asignados', value: (caseData.abogados_asignados?.map((a) => a.username).join(', ') || caseData.abogado_responsable) || '—' },
               { label: 'Juzgado / Sala', value: caseData.juzgado },
               { label: 'Cliente', value: caseData.cliente_nombre },
               { label: 'DNI/RUC', value: caseData.cliente_dni },
@@ -1314,66 +1393,147 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUs
 
           {activeTab === 'editar' && (
             <div className="bg-white p-10 rounded-[2rem] border border-slate-100 shadow-2xl">
-              <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-8 border-b pb-4">Detalles del Proceso — Editar y guardar</h4>
+              <div className="flex flex-wrap items-center justify-between gap-4 mb-8 border-b border-slate-100 pb-4">
+                <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest">Detalles del Proceso — Editar</h4>
+                {hasEditChanges() && (
+                  <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200">
+                    Cambios sin guardar
+                  </span>
+                )}
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="md:col-span-2 space-y-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Carátula</label>
-                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-bold border border-slate-100" value={caseData.caratula || ''} onChange={(e) => handleUpdateField('caratula', e.target.value)} />
+                  <input
+                    className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-bold border border-slate-100 focus:ring-2 focus:ring-orange-500 focus:border-orange-200 transition-shadow"
+                    value={editDraft.caratula}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, caratula: e.target.value }))}
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nro. Expediente</label>
-                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100" value={caseData.nro_expediente || ''} onChange={(e) => handleUpdateField('nro_expediente', e.target.value)} />
+                  <input
+                    className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100 focus:ring-2 focus:ring-orange-500 focus:border-orange-200 transition-shadow"
+                    value={editDraft.nro_expediente}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, nro_expediente: e.target.value }))}
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Juzgado / Sala</label>
-                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.juzgado || ''} onChange={(e) => handleUpdateField('juzgado', e.target.value)} />
+                  <input
+                    className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 focus:ring-2 focus:ring-orange-500 focus:border-orange-200 transition-shadow"
+                    value={editDraft.juzgado}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, juzgado: e.target.value }))}
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Contraparte</label>
-                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.contraparte || ''} onChange={(e) => handleUpdateField('contraparte', e.target.value)} />
+                  <input
+                    className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 focus:ring-2 focus:ring-orange-500 focus:border-orange-200 transition-shadow"
+                    value={editDraft.contraparte}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, contraparte: e.target.value }))}
+                  />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    Abogado responsable
-                    {!isAdmin && <span className="text-[8px] text-slate-300 ml-2">(Solo Admin)</span>}
-                  </label>
-                  <select
-                    className={`w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    value={caseData.abogado_responsable || ''}
-                    onChange={(e) => {
-                      if (isAdmin) handleUpdateField('abogado_responsable', e.target.value);
-                    }}
-                    disabled={!isAdmin}
-                  >
-                    <option value="">Sin asignar</option>
-                    {abogados.map((u) => (
-                      <option key={String(u.id)} value={u.username}>{u.username}</option>
-                    ))}
-                  </select>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Abogados asignados</label>
+                  <div className="max-h-48 overflow-y-auto border border-slate-100 rounded-2xl p-4 bg-slate-50 space-y-1 focus-within:ring-2 focus-within:ring-orange-500 focus-within:border-orange-200 transition-shadow">
+                    {abogados.length === 0 ? (
+                      <p className="text-sm text-slate-400">No hay abogados disponibles</p>
+                    ) : (
+                      abogados.map((u) => {
+                        const isChecked = editDraft.abogados_asignados_ids.some((id) => String(id) === String(u.id));
+                        return (
+                          <label key={u.id} className="flex items-center gap-3 cursor-pointer hover:bg-slate-100 rounded-lg px-3 py-2 -mx-1 transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                const ids = e.target.checked
+                                  ? [...editDraft.abogados_asignados_ids, u.id]
+                                  : editDraft.abogados_asignados_ids.filter((id) => String(id) !== String(u.id));
+                                setEditDraft((prev) => ({ ...prev, abogados_asignados_ids: ids }));
+                              }}
+                              className="rounded border-slate-300 text-orange-500 focus:ring-orange-500"
+                            />
+                            <span className="text-sm font-bold text-slate-700">{u.username}</span>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cliente (nombre completo)</label>
-                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.cliente_nombre || ''} onChange={(e) => handleUpdateField('cliente_nombre', e.target.value)} placeholder="Nombre del cliente" />
+                  <input
+                    className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 focus:ring-2 focus:ring-orange-500 focus:border-orange-200 transition-shadow"
+                    value={editDraft.cliente_nombre}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, cliente_nombre: e.target.value }))}
+                    placeholder="Nombre del cliente"
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">DNI / RUC Cliente</label>
-                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100" value={caseData.cliente_dni || ''} onChange={(e) => handleUpdateField('cliente_dni', e.target.value)} placeholder="DNI o RUC" />
+                  <input
+                    className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100 focus:ring-2 focus:ring-orange-500 focus:border-orange-200 transition-shadow"
+                    value={editDraft.cliente_dni}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, cliente_dni: e.target.value }))}
+                    placeholder="DNI o RUC"
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fuero / Jurisdicción</label>
-                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.fuero || ''} onChange={(e) => handleUpdateField('fuero', e.target.value)} placeholder="Ej: Civil, Comercial..." />
+                  <input
+                    className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 focus:ring-2 focus:ring-orange-500 focus:border-orange-200 transition-shadow"
+                    value={editDraft.fuero}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, fuero: e.target.value }))}
+                    placeholder="Ej: Civil, Comercial..."
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Estado de tramitación</label>
-                  <select className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold" value={caseData.estado || ''} onChange={(e) => handleUpdateField('estado', e.target.value)}>
-                    {Object.values(CaseStatus).map(s => (
+                  <select
+                    className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold focus:ring-2 focus:ring-orange-500 focus:border-orange-200 transition-shadow"
+                    value={editDraft.estado}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, estado: e.target.value }))}
+                  >
+                    {Object.values(CaseStatus).map((s) => (
                       <option key={s} value={s}>{s}</option>
                     ))}
                   </select>
                 </div>
               </div>
-              <p className="mt-6 text-[10px] text-slate-400 font-bold">Los cambios se guardan al editar cada campo. El panel izquierdo refleja los datos actualizados.</p>
-              <button type="button" onClick={() => setActiveTab('actuaciones')} className="mt-6 bg-black text-white px-12 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-2xl hover:bg-zinc-800 transition-all">Volver a Actuaciones</button>
+              <div className="mt-8 pt-8 border-t border-slate-100 flex flex-col sm:flex-row flex-wrap gap-4 items-stretch sm:items-center">
+                <button
+                  type="button"
+                  onClick={handleSaveEdit}
+                  disabled={isSavingEdit || !hasEditChanges()}
+                  className="order-1 bg-black text-white px-10 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg hover:bg-zinc-800 hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-lg flex items-center justify-center gap-2 min-w-[140px]"
+                >
+                  {isSavingEdit ? (
+                    <>
+                      <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                      Guardando...
+                    </>
+                  ) : (
+                    'Guardar'
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  disabled={isSavingEdit || !hasEditChanges()}
+                  className="order-2 bg-slate-100 text-slate-600 px-10 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('actuaciones')}
+                  className="order-3 bg-slate-100 text-slate-600 px-10 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-slate-200 transition-colors"
+                >
+                  Volver a Actuaciones
+                </button>
+              </div>
             </div>
           )}
         </div>

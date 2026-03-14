@@ -1,7 +1,17 @@
-
 import React, { useState, useEffect } from 'react';
-import { LawCase, CaseStatus, CasePriority, ViewState, DashboardStats } from '../types';
+import { LawCase, CaseStatus, ViewState, DashboardStats } from '../types';
 import * as api from '../services/apiService';
+import DashboardStickyNotes from './DashboardStickyNotes';
+
+/** Formatea minutos a "Xh Ym" legible. */
+const formatMinutosAHoras = (minutos: number): string => {
+  if (!minutos || minutos === 0) return '0h';
+  const h = Math.floor(minutos / 60);
+  const m = minutos % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+};
 
 interface DashboardProps {
   cases: LawCase[];
@@ -69,11 +79,13 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
 
   const handleSaveAviso = async () => {
     try {
-      await api.apiCreateAviso(avisoContent);
+      const created = await api.apiCreateAviso(avisoContent);
       setEditingAviso(false);
-      const stats = await api.apiGetDashboard();
-      setDashboardStats(stats);
-      onStatsLoaded?.(stats);
+      setAvisoContent(created.contenido);
+      setDashboardStats((prev) => (prev ? { ...prev, aviso: created } : null));
+      if (dashboardStats) {
+        onStatsLoaded?.({ ...dashboardStats, aviso: created });
+      }
     } catch (e) {
       alert('Error al guardar aviso');
     }
@@ -210,18 +222,33 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
   const stats = dashboardStats?.stats || {
     total_cases: casesArray.length,
     open_cases: casesArray.filter(c => c.estado === CaseStatus.OPEN).length,
-    in_progress_cases: casesArray.filter(c => c.estado === CaseStatus.IN_PROGRESS).length,
-    paused_cases: casesArray.filter(c => c.estado === CaseStatus.PAUSED).length,
     closed_cases: casesArray.filter(c => c.estado === CaseStatus.CLOSED).length,
+    horas_trabajadas_cumplidas_minutos: 0,
+    horas_trabajadas_total_minutos: 0,
   };
 
   if (loading && !loadError) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto"></div>
-          <p className="mt-4 text-slate-600 font-medium">Cargando dashboard...</p>
-          <p className="mt-2 text-slate-400 text-sm">Si tarda más de 1 min, el servidor puede estar despertando.</p>
+      <div className="space-y-8 animate-fadeIn">
+        <header className="flex flex-col md:flex-row gap-6 border-b border-slate-200 pb-8">
+          <div className="flex-1 h-32 bg-slate-200/60 rounded-[2rem] animate-pulse" />
+          <div className="h-24 w-48 bg-slate-200/60 rounded-[2rem] animate-pulse" />
+        </header>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="bg-slate-100 p-6 rounded-2xl border border-slate-100 h-24 animate-pulse" />
+          ))}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="space-y-4">
+            <div className="h-64 bg-slate-100 rounded-2xl animate-pulse" />
+            <div className="h-96 bg-slate-100 rounded-2xl animate-pulse" />
+          </div>
+          <div className="lg:col-span-2 h-[70vh] bg-slate-100 rounded-[2.5rem] animate-pulse" />
+        </div>
+        <div className="flex justify-center py-4">
+          <div className="animate-spin rounded-full h-8 w-8 border-2 border-orange-500 border-t-transparent" />
+          <span className="ml-2 text-sm text-slate-500">Cargando datos...</span>
         </div>
       </div>
     );
@@ -329,13 +356,13 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
           <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2">Abiertos</p>
           <p className="text-3xl font-black text-blue-600">{stats.open_cases}</p>
         </div>
-        <div className="bg-orange-50 p-6 rounded-2xl border border-orange-100 shadow-sm">
-          <p className="text-[10px] font-black text-orange-600 uppercase tracking-widest mb-2">En Trámite</p>
-          <p className="text-3xl font-black text-orange-600">{stats.in_progress_cases}</p>
+        <div className="bg-emerald-50 p-6 rounded-2xl border border-emerald-100 shadow-sm">
+          <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-2">Horas Cumplidas</p>
+          <p className="text-3xl font-black text-emerald-600">{formatMinutosAHoras(stats.horas_trabajadas_cumplidas_minutos)}</p>
         </div>
-        <div className="bg-yellow-50 p-6 rounded-2xl border border-yellow-100 shadow-sm">
-          <p className="text-[10px] font-black text-yellow-600 uppercase tracking-widest mb-2">Pausados</p>
-          <p className="text-3xl font-black text-yellow-600">{stats.paused_cases}</p>
+        <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 shadow-sm">
+          <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-2">Horas Totales</p>
+          <p className="text-3xl font-black text-indigo-600">{formatMinutosAHoras(stats.horas_trabajadas_total_minutos)}</p>
         </div>
         <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 shadow-sm">
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Cerrados</p>
@@ -344,8 +371,9 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col h-[70vh]">
+        <div className="lg:col-span-1 space-y-6 flex flex-col">
+          <DashboardStickyNotes initialNotes={dashboardStats?.sticky_notes} />
+          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col flex-1 min-h-0">
             <h3 className="text-[11px] font-black text-slate-900 uppercase tracking-[0.2em] mb-8 flex items-center justify-between sticky top-0 bg-white pb-2 z-10 border-b border-slate-50">
               Control de Plazos
               <span className="bg-orange-100 text-orange-600 px-3 py-1 rounded-lg text-[9px]">{sortedAlerts.filter(a => !a.cumplida).length} Pendientes</span>

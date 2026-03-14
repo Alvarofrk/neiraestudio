@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate
+from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, UserStickyNote, UserCalendarEvent
 
 
 @admin.register(User)
@@ -85,6 +85,22 @@ class CaseAlertaAdmin(admin.ModelAdmin):
     list_filter = ['cumplida', 'prioridad', 'fecha_vencimiento']
     search_fields = ['titulo', 'resumen', 'caso__caratula']
     readonly_fields = ['created_at', 'created_by', 'completed_at', 'completed_by']
+
+
+@admin.register(UserStickyNote)
+class UserStickyNoteAdmin(admin.ModelAdmin):
+    list_display = ['titulo', 'user', 'fecha_recordatorio', 'completada', 'created_at']
+    list_filter = ['completada', 'created_at']
+    search_fields = ['titulo', 'contenido', 'user__username']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(UserCalendarEvent)
+class UserCalendarEventAdmin(admin.ModelAdmin):
+    list_display = ['titulo', 'user', 'fecha', 'hora', 'tipo', 'caso', 'created_at']
+    list_filter = ['tipo', 'fecha', 'created_at']
+    search_fields = ['titulo', 'descripcion', 'user__username']
+    readonly_fields = ['created_at', 'updated_at']
 
 
 @admin.register(CaseNote)

@@ -287,7 +287,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
             <tr className="bg-zinc-900 text-white text-[10px] font-black uppercase tracking-widest">
               <th className="px-6 py-4">ID Interno / Exp</th>
               <th className="px-6 py-4">Carátula</th>
-              <th className="px-6 py-4">Abogado responsable</th>
+              <th className="px-6 py-4">Abogados asignados</th>
               <th className="px-6 py-4">Fuero</th>
               <th className="px-6 py-4">Estado</th>
               <th className="px-6 py-4 text-right">Acción</th>
@@ -331,7 +331,9 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
                   )}
                 </td>
                 <td className="px-6 py-4">
-                  <p className="text-xs font-bold text-slate-700">{c.abogado_responsable || '—'}</p>
+                  <p className="text-xs font-bold text-slate-700">
+                    {(c.abogados_asignados?.map((a) => a.username).join(', ') || c.abogado_responsable) || '—'}
+                  </p>
                 </td>
                 <td className="px-6 py-4">
                   <p className="text-xs text-slate-600">{c.fuero || '—'}</p>

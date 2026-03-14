@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso
+from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso, UserStickyNote, UserCalendarEvent
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -135,6 +135,119 @@ class DashboardAlertaSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'created_by', 'completed_at', 'completed_by', 'case_id', 'caratula', 'codigo_interno']
 
 
+class CalendarEventAlertaSerializer(serializers.ModelSerializer):
+    """Evento de calendario: alerta. Formato unificado para frontend."""
+    kind = serializers.SerializerMethodField()
+    titulo = serializers.CharField(read_only=True)
+    fecha = serializers.DateField(source='fecha_vencimiento', read_only=True)
+    caratula = serializers.CharField(source='caso.caratula', read_only=True)
+    codigo_interno = serializers.CharField(source='caso.codigo_interno', read_only=True)
+    case = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CaseAlerta
+        fields = [
+            'kind', 'id', 'titulo', 'resumen', 'fecha', 'hora', 'fecha_vencimiento',
+            'caratula', 'codigo_interno', 'prioridad', 'cumplida', 'case'
+        ]
+
+    def get_kind(self, obj) -> str:
+        return 'alerta'
+
+    def get_case(self, obj) -> dict:
+        """Objeto mínimo del expediente para navegación."""
+        c = obj.caso
+        return {'id': c.id, 'codigo_interno': c.codigo_interno, 'caratula': c.caratula}
+
+
+class CalendarEventActuacionSerializer(serializers.ModelSerializer):
+    """Evento de calendario: actuación. Formato unificado para frontend."""
+    kind = serializers.SerializerMethodField()
+    titulo = serializers.SerializerMethodField()
+    fecha_vencimiento = serializers.DateField(source='fecha', read_only=True)
+    caratula = serializers.CharField(source='caso.caratula', read_only=True)
+    codigo_interno = serializers.CharField(source='caso.codigo_interno', read_only=True)
+    case = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CaseActuacion
+        fields = [
+            'kind', 'id', 'titulo', 'descripcion', 'tipo', 'fecha', 'fecha_vencimiento',
+            'caratula', 'codigo_interno', 'case'
+        ]
+
+    def get_kind(self, obj) -> str:
+        return 'actuacion'
+
+    def get_titulo(self, obj) -> str:
+        return obj.tipo or obj.descripcion[:80] if obj.descripcion else 'Sin título'
+
+    def get_case(self, obj) -> dict:
+        c = obj.caso
+        return {'id': c.id, 'codigo_interno': c.codigo_interno, 'caratula': c.caratula}
+
+
+class CalendarEventPersonalSerializer(serializers.ModelSerializer):
+    """Evento de calendario: personal. Formato unificado para frontend."""
+    kind = serializers.SerializerMethodField()
+    fecha_vencimiento = serializers.DateField(source='fecha', read_only=True)
+    caratula = serializers.SerializerMethodField()
+    codigo_interno = serializers.SerializerMethodField()
+    case = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserCalendarEvent
+        fields = [
+            'kind', 'id', 'titulo', 'descripcion', 'tipo', 'fecha', 'hora', 'fecha_vencimiento',
+            'caratula', 'codigo_interno', 'case'
+        ]
+
+    def get_kind(self, obj) -> str:
+        return 'personal'
+
+    def get_caratula(self, obj) -> str:
+        return obj.caso.caratula if obj.caso else ''
+
+    def get_codigo_interno(self, obj) -> str:
+        return obj.caso.codigo_interno if obj.caso else ''
+
+    def get_case(self, obj) -> dict | None:
+        if not obj.caso:
+            return None
+        c = obj.caso
+        return {'id': c.id, 'codigo_interno': c.codigo_interno, 'caratula': c.caratula}
+
+
+class UserCalendarEventSerializer(serializers.ModelSerializer):
+    """Serializer CRUD para eventos personales del calendario."""
+    class Meta:
+        model = UserCalendarEvent
+        fields = ['id', 'titulo', 'descripcion', 'fecha', 'hora', 'tipo', 'caso', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'hora': {'required': False, 'allow_null': True},
+            'tipo': {'required': False, 'allow_blank': True},
+            'descripcion': {'required': False, 'allow_blank': True},
+            'caso': {'required': False, 'allow_null': True},
+        }
+
+    def create(self, validated_data):
+        validated_data['user'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+class UserStickyNoteSerializer(serializers.ModelSerializer):
+    """Serializer para notitas/recordatorios personales."""
+    class Meta:
+        model = UserStickyNote
+        fields = ['id', 'titulo', 'contenido', 'fecha_recordatorio', 'completada', 'orden', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        validated_data['user'] = self.context['request'].user
+        return super().create(validated_data)
+
+
 class CaseNoteSerializer(serializers.ModelSerializer):
     """Serializer para notas"""
     created_by_username = serializers.SerializerMethodField()
@@ -153,6 +266,13 @@ class ClienteMinimalSerializer(serializers.ModelSerializer):
     class Meta:
         model = Cliente
         fields = ['id', 'nombre_completo']
+
+
+class AbogadoMinimalSerializer(serializers.ModelSerializer):
+    """Solo id y username para multiselect de abogados asignados."""
+    class Meta:
+        model = User
+        fields = ['id', 'username']
 
 
 class ClienteSerializer(serializers.ModelSerializer):
@@ -215,6 +335,14 @@ class LawCaseSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
+    abogados_asignados = AbogadoMinimalSerializer(many=True, read_only=True)
+    abogados_asignados_ids = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(rol__in=['abogado', 'admin']),
+        source='abogados_asignados',
+        many=True,
+        write_only=True,
+        required=False
+    )
     created_by_username = serializers.SerializerMethodField()
     last_modified_by_username = serializers.SerializerMethodField()
     
@@ -222,8 +350,9 @@ class LawCaseSerializer(serializers.ModelSerializer):
         model = LawCase
         fields = [
             'id', 'codigo_interno', 'caratula', 'nro_expediente', 'juzgado', 'fuero',
-            'estado', 'abogado_responsable', 'cliente', 'cliente_id', 'cliente_nombre', 
-            'cliente_dni', 'contraparte', 'fecha_inicio', 'folder_link', 'created_at', 'updated_at', 
+            'estado', 'abogado_responsable', 'abogados_asignados', 'abogados_asignados_ids',
+            'cliente', 'cliente_id', 'cliente_nombre', 'cliente_dni', 'contraparte',
+            'fecha_inicio', 'folder_link', 'created_at', 'updated_at',
             'created_by', 'last_modified_by', 'created_by_username', 'last_modified_by_username',
             'actuaciones', 'alertas', 'notas', 'etiquetas', 'etiquetas_ids'
         ]
@@ -253,14 +382,15 @@ class LawCaseListSerializer(serializers.ModelSerializer):
     created_by_username = serializers.SerializerMethodField()
     last_modified_by_username = serializers.SerializerMethodField()
     cliente_nombre_display = serializers.SerializerMethodField()
+    abogados_asignados = AbogadoMinimalSerializer(many=True, read_only=True)
     etiquetas = CaseTagSerializer(many=True, read_only=True)
     
     class Meta:
         model = LawCase
         fields = [
             'id', 'codigo_interno', 'caratula', 'nro_expediente', 'juzgado', 'fuero',
-            'estado', 'cliente', 'cliente_nombre', 'cliente_nombre_display', 'cliente_dni', 
-            'abogado_responsable', 'fecha_inicio', 'updated_at', 
+            'estado', 'cliente', 'cliente_nombre', 'cliente_nombre_display', 'cliente_dni',
+            'abogados_asignados', 'fecha_inicio', 'updated_at',
             'created_by_username', 'last_modified_by_username', 'etiquetas'
         ]
     
