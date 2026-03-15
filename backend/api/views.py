@@ -960,6 +960,42 @@ class DashboardView(APIView):
         return Response(data)
 
 
+class DashboardTodayEventsView(APIView):
+    """Solo eventos de hoy (alertas, actuaciones, personales). Para refrescar la sección notitas sin recargar todo el dashboard."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        cases = DashboardView._get_cases_queryset_for_user(request)
+        cases_ids_list = list(cases.only('id').values_list('id', flat=True))
+        today = timezone.now().date()
+        today_alertas = (
+            CaseAlerta.objects.filter(caso_id__in=cases_ids_list)
+            .filter(fecha_vencimiento=today)
+            .select_related('caso')
+            .order_by('hora')
+        )
+        today_actuaciones = (
+            CaseActuacion.objects.filter(caso_id__in=cases_ids_list)
+            .filter(fecha=today)
+            .select_related('caso')
+            .order_by('fecha')
+        )
+        today_personales = (
+            UserCalendarEvent.objects.filter(user=request.user)
+            .filter(fecha=today)
+            .order_by('hora')
+        )
+        from .serializers import CalendarEventAlertaSerializer, CalendarEventActuacionSerializer, CalendarEventPersonalSerializer
+        today_events_serialized = []
+        for e in today_alertas:
+            today_events_serialized.append(CalendarEventAlertaSerializer(e).data)
+        for e in today_actuaciones:
+            today_events_serialized.append(CalendarEventActuacionSerializer(e).data)
+        for e in today_personales:
+            today_events_serialized.append(CalendarEventPersonalSerializer(e).data)
+        return Response({'today_events': today_events_serialized})
+
+
 class DashboardActivitiesView(APIView):
     """Actividades del dashboard paginadas (lazy loading). Misma lógica que DashboardView."""
     permission_classes = [permissions.IsAuthenticated]
@@ -1038,14 +1074,16 @@ class ExportActivitiesView(APIView):
         }
 
         for row_num, activity in enumerate(activities, 2):
+            # Fecha/hora en zona local (America/Lima) para que coincida con lo que ve el usuario
+            local_dt = timezone.localtime(activity.created_at) if activity.created_at else None
             ws.cell(row=row_num, column=1, value=activity.caso.codigo_interno if activity.caso else '-')
             ws.cell(row=row_num, column=2, value=activity.caso.caratula if activity.caso else '-')
             ws.cell(row=row_num, column=3, value=action_labels.get(activity.action, activity.action))
             ws.cell(row=row_num, column=4, value=entity_labels.get(activity.entity_type, activity.entity_type))
             ws.cell(row=row_num, column=5, value=activity.description)
             ws.cell(row=row_num, column=6, value=activity.user.username if activity.user else 'Sistema')
-            ws.cell(row=row_num, column=7, value=activity.created_at.strftime('%d/%m/%Y') if activity.created_at else '-')
-            ws.cell(row=row_num, column=8, value=activity.created_at.strftime('%H:%M') if activity.created_at else '-')
+            ws.cell(row=row_num, column=7, value=local_dt.strftime('%d/%m/%Y') if local_dt else '-')
+            ws.cell(row=row_num, column=8, value=local_dt.strftime('%H:%M') if local_dt else '-')
 
             for col in range(1, 9):
                 ws.cell(row=row_num, column=col).border = thin_border
@@ -1056,7 +1094,9 @@ class ExportActivitiesView(APIView):
         response = HttpResponse(
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
-        response['Content-Disposition'] = 'attachment; filename=trazabilidad.xlsx'
+        # Nombre con fecha en zona local para identificar la descarga
+        fecha_descarga = timezone.localtime(timezone.now()).strftime('%Y-%m-%d')
+        response['Content-Disposition'] = f'attachment; filename=trazabilidad_{fecha_descarga}.xlsx'
         wb.save(response)
         return response
 

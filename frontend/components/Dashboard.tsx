@@ -392,7 +392,7 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
         </div>
       </header>
 
-      {/* Estadísticas Rápidas */}
+      {/* Estadísticas Rápidas: Total, Abiertos, Cerrados, luego Horas Cumplidas y Horas Totales */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Total</p>
@@ -402,6 +402,10 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
           <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2">Abiertos</p>
           <p className="text-3xl font-black text-blue-600">{stats.open_cases}</p>
         </div>
+        <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 shadow-sm">
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Cerrados</p>
+          <p className="text-3xl font-black text-slate-600">{stats.closed_cases}</p>
+        </div>
         <div className="bg-emerald-50 p-6 rounded-2xl border border-emerald-100 shadow-sm">
           <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-2">Horas Cumplidas</p>
           <p className="text-3xl font-black text-emerald-600">{formatMinutosAHoras(stats.horas_trabajadas_cumplidas_minutos)}</p>
@@ -409,10 +413,6 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
         <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 shadow-sm">
           <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-2">Horas Totales</p>
           <p className="text-3xl font-black text-indigo-600">{formatMinutosAHoras(stats.horas_trabajadas_total_minutos)}</p>
-        </div>
-        <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 shadow-sm">
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Cerrados</p>
-          <p className="text-3xl font-black text-slate-600">{stats.closed_cases}</p>
         </div>
       </div>
 
@@ -520,11 +520,14 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
                         headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
                       });
                       if (!response.ok) throw new Error('Error al exportar');
+                      const disposition = response.headers.get('Content-Disposition');
+                      const match = disposition?.match(/filename[*]?=(?:UTF-8'')?["']?([^"'\s;]+)["']?/i);
+                      const filename = match?.[1] ?? `trazabilidad_${new Date().toISOString().slice(0, 10)}.xlsx`;
                       const blob = await response.blob();
                       const url = window.URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = url;
-                      a.download = 'trazabilidad.xlsx';
+                      a.download = filename;
                       a.click();
                       window.URL.revokeObjectURL(url);
                     } catch (e) {

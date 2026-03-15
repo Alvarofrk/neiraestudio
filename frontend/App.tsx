@@ -275,6 +275,20 @@ const App: React.FC = () => {
       });
   }, [caseDetailCache]);
 
+  /** Actualiza solo los eventos de hoy en la caché del dashboard (notitas) sin recargar todo. */
+  const refreshDashboardTodayEvents = useCallback(() => {
+    api
+      .apiGetDashboardTodayEvents()
+      .then((data) => {
+        setDashboardStatsCache((prev) =>
+          prev ? { ...prev, today_events: data.today_events ?? [] } : null
+        );
+      })
+      .catch(() => {
+        // No vaciar la caché: si falla la petición, mantener notitas y el resto para que el dashboard no quede vacío
+      });
+  }, []);
+
   const handleAddCase = async (newCaseData: Omit<LawCase, 'id' | 'codigo_interno' | 'updatedAt' | 'actuaciones' | 'alertas' | 'notas' | 'createdBy' | 'lastModifiedBy' | 'created_at' | 'updated_at'>) => {
     try {
       await api.apiCreateCase(newCaseData);
@@ -409,6 +423,11 @@ const App: React.FC = () => {
             onSelectCase={navigateToCase}
             onViewChange={setCurrentView}
             initialEventsByMonth={calendarEventsCache}
+            onShowToast={showToast}
+            onEventCreatedOrUpdated={refreshDashboardTodayEvents}
+            onCalendarMonthEventsUpdated={(monthKey, events) =>
+              setCalendarEventsCache((prev) => ({ ...prev, [monthKey]: events }))
+            }
           />
         );
       default:

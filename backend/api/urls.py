@@ -4,7 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
     AuthView, CurrentUserView, AssignableUsersView,
-    DashboardView, DashboardAlertasView, DashboardActivitiesView, CalendarEventsView,
+    DashboardView, DashboardTodayEventsView, DashboardAlertasView, DashboardActivitiesView, CalendarEventsView,
     ExportActivitiesView,
     UserViewSet, LawCaseViewSet,
     CaseActuacionViewSet, CaseAlertaViewSet, CaseNoteViewSet,
@@ -35,6 +35,7 @@ urlpatterns = [
     
     # Dashboard
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
+    path('dashboard/today-events/', DashboardTodayEventsView.as_view(), name='dashboard-today-events'),
     path('dashboard/alertas/', DashboardAlertasView.as_view(), name='dashboard-alertas'),
     path('dashboard/activities/', DashboardActivitiesView.as_view(), name='dashboard-activities'),
     path('dashboard/export-activities/', ExportActivitiesView.as_view(), name='export-activities'),

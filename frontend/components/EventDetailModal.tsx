@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CalendarEvent, LawCase } from '../types';
 
 interface EventDetailModalProps {
@@ -45,6 +45,11 @@ const EventDetailModal: React.FC<EventDetailModalProps> = ({
 }) => {
   const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open || !event) setConfirmDeleteOpen(false);
+  }, [open, event?.id]);
 
   if (!open) return null;
 
@@ -91,7 +96,7 @@ const EventDetailModal: React.FC<EventDetailModalProps> = ({
 
   const handleDeletePersonal = async () => {
     if (event?.kind !== 'personal' || !onDeletePersonalEvent) return;
-    if (!confirm('¿Eliminar este evento?')) return;
+    setConfirmDeleteOpen(false);
     setDeleting(true);
     try {
       await onDeletePersonalEvent(String(event.id));
@@ -212,13 +217,47 @@ const EventDetailModal: React.FC<EventDetailModalProps> = ({
             </button>
           )}
           {event?.kind === 'personal' && onDeletePersonalEvent && (
-            <button
-              onClick={handleDeletePersonal}
-              disabled={deleting}
-              className="px-6 py-3 border border-red-200 hover:bg-red-50 text-red-600 font-bold rounded-xl transition-colors disabled:opacity-50"
-            >
-              {deleting ? '...' : 'Eliminar'}
-            </button>
+            confirmDeleteOpen ? (
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-wrap">
+                <p className="text-sm text-slate-600 font-medium">¿Eliminar este evento?</p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteOpen(false)}
+                    disabled={deleting}
+                    className="px-4 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl transition-colors disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeletePersonal}
+                    disabled={deleting}
+                    className="px-4 py-2.5 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {deleting ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Eliminando…
+                      </>
+                    ) : (
+                      'Eliminar'
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteOpen(true)}
+                disabled={deleting}
+                className="px-6 py-3 border border-red-200 hover:bg-red-50 text-red-600 font-bold rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 min-w-[120px]"
+              >
+                Eliminar
+              </button>
+            )
           )}
           {event?.kind === 'alerta' && onToggleAlerta && (
             <button

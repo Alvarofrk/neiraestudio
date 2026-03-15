@@ -10,6 +10,12 @@ interface CalendarProps {
   onViewChange: (view: ViewState) => void;
   /** Cache de eventos por mes (YYYY-MM) desde App; evita loading si ya se precargó al hacer hover. */
   initialEventsByMonth?: Record<string, CalendarEvent[]>;
+  /** Callback para mostrar toast (éxito/error) al eliminar evento. */
+  onShowToast?: (message: string, type: 'success' | 'error' | 'info') => void;
+  /** Llamado al crear/editar un evento; invalida caché del dashboard para que "Hoy" se actualice. */
+  onEventCreatedOrUpdated?: () => void;
+  /** Actualiza la caché de eventos por mes en el padre (App) para que al volver al calendario se vean los cambios. */
+  onCalendarMonthEventsUpdated?: (monthKey: string, events: CalendarEvent[]) => void;
 }
 
 const normalizeDate = (dateInput: string | Date): string => {
@@ -29,7 +35,7 @@ const getEventFecha = (e: CalendarEvent): string =>
 
 const CACHE_KEY = (desde: string, hasta: string) => `${desde}_${hasta}`;
 
-const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase, onViewChange, initialEventsByMonth }) => {
+const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase, onViewChange, initialEventsByMonth, onShowToast, onEventCreatedOrUpdated, onCalendarMonthEventsUpdated }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -158,12 +164,16 @@ const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase
     );
   };
 
+  const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+
   const refreshEvents = () => {
+    onEventCreatedOrUpdated?.();
     api
       .apiGetCalendarEvents(desde, hasta)
       .then((data) => {
         setEvents(data);
         setEventsCache((prev) => ({ ...prev, [cacheKey]: data }));
+        onCalendarMonthEventsUpdated?.(monthKey, data);
       })
       .catch(() => setEvents([]));
   };
@@ -180,8 +190,20 @@ const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase
   };
 
   const handleDeletePersonal = async (eventId: string) => {
-    await api.apiDeleteCalendarEvent(eventId);
-    setEvents((prev) => prev.filter((e) => String(e.id) !== eventId));
+    try {
+      await api.apiDeleteCalendarEvent(eventId);
+      setEvents((prev) => {
+        const next = prev.filter((e) => String(e.id) !== eventId);
+        onCalendarMonthEventsUpdated?.(monthKey, next);
+        return next;
+      });
+      onEventCreatedOrUpdated?.();
+      onShowToast?.('Evento eliminado', 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'No se pudo eliminar el evento';
+      onShowToast?.(msg, 'error');
+      throw e;
+    }
   };
 
   const alertsCount = events.filter((e) => e.kind === 'alerta').length;
@@ -223,9 +245,19 @@ const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+      <div className="relative bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+        {loading && (
+          <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white/90 backdrop-blur-sm rounded-2xl"
+            aria-busy="true"
+            aria-label="Cargando actividades del calendario"
+          >
+            <span className="inline-block w-10 h-10 rounded-full border-2 border-orange-500 border-t-transparent animate-spin" />
+            <p className="text-sm font-bold text-slate-600">Cargando actividades…</p>
+          </div>
+        )}
         <div className="bg-zinc-900 text-white p-6 flex items-center justify-between">
-          <button onClick={goToPreviousMonth} className="p-2 hover:bg-zinc-800 rounded-lg transition-all">
+          <button onClick={goToPreviousMonth} className="p-2 hover:bg-zinc-800 rounded-lg transition-all" disabled={loading}>
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
             </svg>
@@ -233,7 +265,7 @@ const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase
           <h3 className="text-xl font-black uppercase tracking-wider">
             {monthNames[month]} {year}
           </h3>
-          <button onClick={goToNextMonth} className="p-2 hover:bg-zinc-800 rounded-lg transition-all">
+          <button onClick={goToNextMonth} className="p-2 hover:bg-zinc-800 rounded-lg transition-all" disabled={loading}>
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
             </svg>

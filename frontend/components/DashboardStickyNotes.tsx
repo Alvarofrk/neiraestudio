@@ -155,7 +155,13 @@ const DashboardStickyNotes: React.FC<DashboardStickyNotesProps> = ({ initialNote
   };
 
   return (
-    <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col h-[160px]">
+    <div
+      className={
+        adding
+          ? 'bg-white p-4 rounded-2xl border border-slate-100 shadow-lg flex flex-col min-h-[160px] max-h-[70vh] overflow-visible relative z-20 transition-all'
+          : 'bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col h-[160px] transition-all'
+      }
+    >
       <div className="flex items-center justify-between mb-2 shrink-0">
         <h3 className="text-[10px] font-black text-slate-900 uppercase tracking-[0.2em]">
           Mis Notitas / Recordatorios

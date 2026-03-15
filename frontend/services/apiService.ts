@@ -515,6 +515,11 @@ export const apiGetDashboard = async (): Promise<DashboardStats> => {
   }
 };
 
+/** Solo eventos de hoy (para actualizar la sección notitas sin recargar todo el dashboard). */
+export const apiGetDashboardTodayEvents = async (): Promise<{ today_events: CalendarEvent[] }> => {
+  return await apiRequest<{ today_events: CalendarEvent[] }>('/dashboard/today-events/');
+};
+
 // ============ EXPORTACIÓN ============
 export const apiExportExcel = async (filters?: {
   search?: string;
