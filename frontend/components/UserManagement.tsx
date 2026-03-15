@@ -5,33 +5,36 @@ import { User, UserRole } from '../types';
 
 interface UserManagementProps {
   currentUser: User | null;
+  /** Datos precargados (p. ej. al hacer hover en Usuarios) para mostrar al instante. */
+  initialUsers?: User[] | null;
+  /** Callback para que el padre actualice su cache cuando se carguen/actualicen usuarios. */
+  onUsersLoaded?: (list: User[]) => void;
 }
 
-const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
+const UserManagement: React.FC<UserManagementProps> = ({ currentUser, initialUsers, onUsersLoaded }) => {
   const isAdmin = currentUser?.isAdmin || currentUser?.is_admin || false;
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setUsers] = useState<User[]>(initialUsers ?? []);
   const [newUser, setNewUser] = useState({ username: '', password: '', rol: 'usuario' as UserRole });
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [editForm, setEditForm] = useState({ password: '', rol: 'usuario' as UserRole });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(!(initialUsers && initialUsers.length > 0));
   const [creating, setCreating] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | number | null>(null);
   const [deletingId, setDeletingId] = useState<string | number | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    loadUsers();
+    loadUsers(!(initialUsers && initialUsers.length > 0));
   }, []);
 
-  const loadUsers = async () => {
+  const loadUsers = async (showLoading = true) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       const loadedUsers = await api.apiGetUsers();
-      // Si loadedUsers es un array (incluso vacío), está bien
       if (Array.isArray(loadedUsers)) {
         setUsers(loadedUsers);
+        onUsersLoaded?.(loadedUsers);
       } else {
-        // Si no es un array, establecer array vacío
         setUsers([]);
       }
     } catch (error: any) {
@@ -172,9 +175,9 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
       }
 
       const updated = await api.apiUpdateUser(String(editingUser.id), updateData);
-      
-      // Actualizar la lista de usuarios
-      setUsers(users.map(u => String(u.id) === String(editingUser.id) ? updated : u));
+      const nextList = users.map(u => String(u.id) === String(editingUser.id) ? updated : u);
+      setUsers(nextList);
+      onUsersLoaded?.(nextList);
       setEditingUser(null);
       setEditForm({ password: '', rol: 'usuario' });
       setSuccessMessage(`Usuario "${updated.username}" actualizado exitosamente`);
@@ -225,7 +228,9 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
       setDeletingId(id);
       setSuccessMessage(null);
       await api.apiDeleteUser(idStr);
-      setUsers(users.filter(u => String(u.id) !== idStr));
+      const nextList = users.filter(u => String(u.id) !== idStr);
+      setUsers(nextList);
+      onUsersLoaded?.(nextList);
       setSuccessMessage(`Usuario "${userName}" eliminado exitosamente`);
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch (error: any) {

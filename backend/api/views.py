@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 from rest_framework import viewsets, status, permissions, serializers
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -5,10 +7,12 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.core.paginator import Paginator
 from django.db import transaction, IntegrityError, connection
 from django.db.models import Q, Prefetch, Count, Subquery, Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
+from django.utils.functional import cached_property
 from django.http import HttpResponse
 import re
 from datetime import datetime, timedelta
@@ -189,10 +193,71 @@ class UserViewSet(viewsets.ModelViewSet):
             raise serializers.ValidationError({'non_field_errors': [f'Error al actualizar usuario: {str(e)}']})
 
 
+class _FastCountPaginator(Paginator):
+    """COUNT por id en lugar de COUNT(*) para listados pesados (menos I/O)."""
+    @cached_property
+    def count(self):
+        return self.object_list.values('id').count()
+
+
 class CaseListPagination(PageNumberPagination):
-    page_size = 15
+    """
+    Página 1: COUNT + slice (para total y "Página 1 de N").
+    Página 2+: solo slice con limit+1 (sin COUNT); next/previous con has_next.
+    Así "Siguiente" ejecuta una sola query pesada en lugar de dos.
+    """
+    page_size = 25
     page_size_query_param = 'page_size'
     max_page_size = 50
+    django_paginator_class = _FastCountPaginator
+
+    def paginate_queryset(self, queryset, request, view=None):
+        page_number = int(request.query_params.get(self.page_query_param, 1))
+        page_size = self.get_page_size(request)
+        if page_number <= 1:
+            self._no_count_mode = False
+            return super().paginate_queryset(queryset, request, view=view)
+        offset = (page_number - 1) * page_size
+        # limit+1 para saber si hay siguiente sin COUNT
+        window = list(queryset[offset : offset + page_size + 1])
+        self._no_count_mode = True
+        self._page_number = page_number
+        self._has_next = len(window) > page_size
+        self._request = request
+        return window[:page_size]
+
+    def get_paginated_response(self, data):
+        if getattr(self, '_no_count_mode', False):
+            return Response(OrderedDict([
+                ('count', None),
+                ('next', self.get_next_link() if self._has_next else None),
+                ('previous', self.get_previous_link()),
+                ('results', data),
+            ]))
+        return super().get_paginated_response(data)
+
+    def get_next_link(self):
+        if getattr(self, '_no_count_mode', False):
+            if not getattr(self, '_has_next', False):
+                return None
+            request = getattr(self, '_request', None)
+            if request:
+                query = request.GET.copy()
+                query[self.page_query_param] = str(self._page_number + 1)
+                return request.build_absolute_uri(request.path + '?' + query.urlencode())
+            return None
+        return super().get_next_link()
+
+    def get_previous_link(self):
+        if getattr(self, '_no_count_mode', False):
+            if getattr(self, '_page_number', 1) <= 1:
+                return None
+            request = getattr(self, '_request', None)
+            if request:
+                query = request.GET.copy()
+                query[self.page_query_param] = str(self._page_number - 1)
+                return request.build_absolute_uri(request.path + '?' + query.urlencode())
+        return super().get_previous_link()
 
 
 class LawCaseViewSet(viewsets.ModelViewSet):
@@ -207,27 +272,25 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         return LawCaseSerializer
     
     def get_queryset(self):
-        # Optimización Base: Siempre cargar relaciones directas y etiquetas (usadas en listado)
-        queryset = LawCase.objects.select_related(
-            'created_by', 'last_modified_by', 'cliente'
-        ).prefetch_related('etiquetas', 'abogados_asignados')
+        # Optimización Base: relaciones directas y M2M usadas en listado
+        queryset = (
+            LawCase.objects
+            .select_related('created_by', 'last_modified_by', 'cliente')
+            .prefetch_related('etiquetas', 'abogados_asignados')
+        )
 
-        # Optimización Condicional: Solo cargar datos pesados (actuaciones, alertas, notas) en detalle
         if self.action == 'retrieve':
             queryset = queryset.prefetch_related(
-                # Traer actuaciones con sus autores ya cargados
                 Prefetch('actuaciones', queryset=CaseActuacion.objects.select_related('created_by', 'last_modified_by').order_by('-fecha', '-created_at')),
-                # Traer alertas con sus autores ya cargados
                 Prefetch('alertas', queryset=CaseAlerta.objects.select_related('created_by', 'completed_by').order_by('fecha_vencimiento', 'prioridad')),
-                # Traer notas con sus autores ya cargados
                 Prefetch('notas', queryset=CaseNote.objects.select_related('created_by').order_by('-created_at'))
             )
-        
-        # Abogados solo ven expedientes donde están asignados
+
+        # Filtros M2M vía Subquery para evitar JOINs que duplican filas y permiten prescindir de distinct()
         if _user_sees_only_own_cases(self.request.user):
-            queryset = queryset.filter(abogados_asignados=self.request.user)
-        
-        # Filtros avanzados
+            own_ids = LawCase.objects.filter(abogados_asignados=self.request.user).values('id')
+            queryset = queryset.filter(id__in=Subquery(own_ids))
+
         search = self.request.query_params.get('search', None)
         estado = self.request.query_params.get('estado', None)
         abogado = self.request.query_params.get('abogado', None)
@@ -239,54 +302,53 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         fecha_inicio_hasta = self.request.query_params.get('fecha_inicio_hasta', None)
         fecha_modificacion_desde = self.request.query_params.get('fecha_modificacion_desde', None)
         fecha_modificacion_hasta = self.request.query_params.get('fecha_modificacion_hasta', None)
-        
+
         if search:
             queryset = queryset.filter(
-                Q(caratula__icontains=search) |
-                Q(cliente_nombre__icontains=search) |
-                Q(nro_expediente__icontains=search) |
-                Q(codigo_interno__icontains=search) |
-                Q(cliente__nombre_completo__icontains=search) |
-                Q(cliente__dni_ruc__icontains=search)
+                Q(caratula__icontains=search)
+                | Q(cliente_nombre__icontains=search)
+                | Q(nro_expediente__icontains=search)
+                | Q(codigo_interno__icontains=search)
+                | Q(cliente__nombre_completo__icontains=search)
+                | Q(cliente__dni_ruc__icontains=search)
             )
-        
         if estado:
             queryset = queryset.filter(estado=estado)
-        
         if abogado:
-            queryset = queryset.filter(abogados_asignados__username__icontains=abogado)
-        
+            abogado_ids = LawCase.objects.filter(abogados_asignados__username__icontains=abogado).values('id')
+            queryset = queryset.filter(id__in=Subquery(abogado_ids))
         if fuero:
             queryset = queryset.filter(fuero=fuero)
-        
         if juzgado:
             queryset = queryset.filter(juzgado__icontains=juzgado)
-        
         if cliente_id:
             queryset = queryset.filter(cliente_id=cliente_id)
-        
         if etiqueta_id:
-            queryset = queryset.filter(etiquetas__id=etiqueta_id)
-        
+            etiqueta_ids = LawCase.objects.filter(etiquetas__id=etiqueta_id).values('id')
+            queryset = queryset.filter(id__in=Subquery(etiqueta_ids))
         if fecha_inicio_desde:
             queryset = queryset.filter(fecha_inicio__gte=fecha_inicio_desde)
-        
         if fecha_inicio_hasta:
             queryset = queryset.filter(fecha_inicio__lte=fecha_inicio_hasta)
-        
         if fecha_modificacion_desde:
             queryset = queryset.filter(updated_at__gte=fecha_modificacion_desde)
-        
         if fecha_modificacion_hasta:
             queryset = queryset.filter(updated_at__lte=fecha_modificacion_hasta)
-        
-        return queryset.distinct()
+
+        if self.action == 'list':
+            queryset = queryset.only(
+                'id', 'codigo_interno', 'caratula', 'nro_expediente', 'juzgado', 'fuero',
+                'estado', 'cliente_id', 'cliente_nombre', 'cliente_dni', 'fecha_inicio',
+                'updated_at', 'created_by_id', 'last_modified_by_id'
+            )
+        return queryset.order_by('-updated_at')
 
     def list(self, request, *args, **kwargs):
-        """Lista expedientes. Con ?include_clientes=1 devuelve clientes en la misma respuesta (1 round-trip menos)."""
+        """Lista expedientes. Incluye clientes solo en página 1 si ?include_clientes=1 (menos carga al paginar)."""
         response = super().list(request, *args, **kwargs)
-        if request.query_params.get('include_clientes') == '1':
-            clientes_qs = Cliente.objects.only('id', 'nombre_completo').order_by('nombre_completo')[:500]
+        page = request.query_params.get('page', '1')
+        if request.query_params.get('include_clientes') == '1' and str(page) == '1':
+            clientes_qs = Cliente.objects.only('id', 'nombre_completo').order_by('nombre_completo')[:180]
             response.data['clientes'] = ClienteMinimalSerializer(clientes_qs, many=True).data
         return response
 

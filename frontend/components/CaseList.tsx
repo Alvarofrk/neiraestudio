@@ -1,9 +1,9 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { LawCase, CaseStatus, ViewState, Cliente, CaseTag } from '../types';
 import * as api from '../services/apiService';
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = 25;
 
 interface CaseListProps {
   cases: LawCase[];
@@ -11,7 +11,7 @@ interface CaseListProps {
   casesPage: number;
   onSelectCase: (lawCase: LawCase) => void | Promise<void>;
   onViewChange: (view: ViewState) => void;
-  onLoadCases: (filters?: api.CasesListFilters, page?: number) => Promise<void>;
+  onLoadCases: (filters?: api.CasesListFilters, page?: number, options?: { silent?: boolean }) => Promise<void>;
   /** Precarga el detalle del expediente al pasar el ratón para abrir la ficha más rápido. */
   onCaseMouseEnter?: (lawCase: LawCase) => void;
   clientesProp?: Cliente[];
@@ -71,6 +71,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
 
   // Aplicar filtros (con debounce para búsqueda)
   useEffect(() => {
+    preloadedPagesRef.current = new Set();
     const hasFilters = searchTerm || statusFilter !== 'all' || abogadoFilter || fueroFilter || juzgadoFilter || clienteFilter || etiquetaFilter;
     if (!hasFilters && cases.length > 0) return;
     const applyFilters = async (page: number = 1) => {
@@ -94,15 +95,46 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
     onLoadCases(buildFilters(), page).finally(() => setLoading(false));
   };
 
-  // Lógica de pesos para ordenamiento
-  const statusWeight = {
+  const preloadedPagesRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    if (totalPages <= 1 || casesPage < 1) return;
+    const nextPage = casesPage + 1;
+    if (nextPage > totalPages || preloadedPagesRef.current.has(nextPage)) return;
+    preloadedPagesRef.current.add(nextPage);
+    onLoadCases(buildFilters(), nextPage, { silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [casesPage, totalPages]);
+
+  const statusWeight: Record<string, number> = useMemo(() => ({
     [CaseStatus.IN_PROGRESS]: 0,
     [CaseStatus.OPEN]: 0,
     [CaseStatus.PAUSED]: 1,
-    [CaseStatus.CLOSED]: 2
-  };
+    [CaseStatus.CLOSED]: 2,
+  }), []);
 
-  const filteredCases = casesArray.sort((a, b) => statusWeight[a.estado] - statusWeight[b.estado]);
+  const filteredCases = useMemo(
+    () => [...casesArray].sort((a, b) => (statusWeight[a.estado] ?? 0) - (statusWeight[b.estado] ?? 0)),
+    [casesArray, statusWeight]
+  );
+
+  const hoverPreloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverPreloadCaseRef = useRef<LawCase | null>(null);
+  const handleCaseMouseEnter = useCallback(
+    (c: LawCase) => {
+      if (!onCaseMouseEnter) return;
+      hoverPreloadCaseRef.current = c;
+      if (hoverPreloadTimeoutRef.current) clearTimeout(hoverPreloadTimeoutRef.current);
+      hoverPreloadTimeoutRef.current = setTimeout(() => {
+        hoverPreloadTimeoutRef.current = null;
+        const target = hoverPreloadCaseRef.current;
+        if (target) onCaseMouseEnter(target);
+      }, 220);
+    },
+    [onCaseMouseEnter]
+  );
+  useEffect(() => () => {
+    if (hoverPreloadTimeoutRef.current) clearTimeout(hoverPreloadTimeoutRef.current);
+  }, []);
 
   const exportToExcel = async () => {
     if (casesArray.length === 0) {
@@ -296,7 +328,18 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filteredCases.length === 0 ? (
+            {loading && casesArray.length === 0 ? (
+              Array.from({ length: 8 }).map((_, i) => (
+                <tr key={`skeleton-${i}`} className="animate-pulse">
+                  <td className="px-6 py-4"><div className="h-4 w-24 bg-slate-200 rounded" /></td>
+                  <td className="px-6 py-4"><div className="h-4 w-full max-w-xs bg-slate-200 rounded" /><div className="h-3 w-32 bg-slate-100 rounded mt-2" /></td>
+                  <td className="px-6 py-4"><div className="h-4 w-28 bg-slate-200 rounded" /></td>
+                  <td className="px-6 py-4"><div className="h-4 w-16 bg-slate-200 rounded" /></td>
+                  <td className="px-6 py-4"><div className="h-6 w-20 bg-slate-200 rounded-full" /></td>
+                  <td className="px-6 py-4 text-right"><div className="h-8 w-24 bg-slate-200 rounded-lg ml-auto" /></td>
+                </tr>
+              ))
+            ) : filteredCases.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-6 py-12 text-center">
                   <div className="flex flex-col items-center">
@@ -312,7 +355,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
               filteredCases.map(c => (
               <tr
                 key={c.id}
-                onMouseEnter={() => onCaseMouseEnter?.(c)}
+                onMouseEnter={() => handleCaseMouseEnter(c)}
                 className={`hover:bg-slate-50 transition-all group ${c.estado === CaseStatus.CLOSED ? 'opacity-60 grayscale' : ''}`}
               >
                 <td className="px-6 py-4">
@@ -383,8 +426,14 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
         </div>
         {totalPages > 1 && (
           <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 bg-slate-50/50">
-            <p className="text-xs font-bold text-slate-500">
+            <p className="text-xs font-bold text-slate-500 flex items-center gap-2">
               Página {casesPage} de {totalPages} · {casesCount} expediente{casesCount !== 1 ? 's' : ''}
+              {loading && casesArray.length > 0 && (
+                <span className="inline-flex items-center gap-1 text-orange-600" aria-hidden>
+                  <span className="animate-spin rounded-full h-3 w-3 border-2 border-orange-500 border-t-transparent" />
+                  <span className="text-[10px]">Cargando...</span>
+                </span>
+              )}
             </p>
             <div className="flex gap-2">
               <button
@@ -399,9 +448,16 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
                 type="button"
                 onClick={() => goToPage(casesPage + 1)}
                 disabled={loading || casesPage >= totalPages}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
               >
-                Siguiente
+                {loading && casesArray.length > 0 ? (
+                  <>
+                    <span className="animate-spin rounded-full h-3 w-3 border-2 border-slate-400 border-t-transparent" />
+                    Siguiente
+                  </>
+                ) : (
+                  'Siguiente'
+                )}
               </button>
             </div>
           </div>

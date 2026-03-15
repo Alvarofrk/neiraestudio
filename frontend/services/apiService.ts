@@ -212,7 +212,8 @@ export interface CasesListFilters {
 
 export interface CasesPaginatedResponse {
   results: LawCase[];
-  count: number;
+  /** Total de expedientes; null en páginas > 1 cuando el backend no ejecuta COUNT. */
+  count: number | null;
   next: string | null;
   previous: string | null;
   clientes?: Cliente[];
@@ -235,8 +236,8 @@ export const apiGetCases = async (
   if (filters?.fecha_modificacion_desde) params.append('fecha_modificacion_desde', filters.fecha_modificacion_desde);
   if (filters?.fecha_modificacion_hasta) params.append('fecha_modificacion_hasta', filters.fecha_modificacion_hasta);
   params.append('page', String(page));
-  params.append('page_size', '10');
-  params.append('include_clientes', '1');
+  params.append('page_size', '25');
+  if (page === 1) params.append('include_clientes', '1');
 
   const result = await apiRequest<any>(`/cases/?${params.toString()}`);
   const results = Array.isArray(result?.results)
@@ -246,7 +247,7 @@ export const apiGetCases = async (
       : Array.isArray(result?.data)
         ? result.data
         : [];
-  const count = typeof result?.count === 'number' ? result.count : results.length;
+  const count = typeof result?.count === 'number' ? result.count : null;
   const clientes = Array.isArray(result?.clientes) ? result.clientes : undefined;
   return {
     results,

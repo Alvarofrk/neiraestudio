@@ -11,9 +11,10 @@ interface LayoutProps {
   onPreloadCases?: () => void;
   onPreloadDashboard?: () => void;
   onPreloadCalendar?: () => void;
+  onPreloadUsers?: () => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, onLogout, currentUser, onPreloadCases, onPreloadDashboard, onPreloadCalendar }) => {
+const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, onLogout, currentUser, onPreloadCases, onPreloadDashboard, onPreloadCalendar, onPreloadUsers }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const isAdmin = Boolean(currentUser?.isAdmin || currentUser?.is_admin);
@@ -77,6 +78,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
           {isAdmin && (
             <button 
               onClick={() => onViewChange('users')}
+              onMouseEnter={() => onPreloadUsers?.()}
               className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${currentView === 'users' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'}`}
             >
               <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
@@ -200,6 +202,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentView, onViewChange, on
                 {isAdmin && (
                   <button
                     onClick={() => navigate('users')}
+                    onMouseEnter={() => onPreloadUsers?.()}
                     className={`w-full flex items-center px-5 py-4 rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest ${
                       currentView === 'users' ? 'bg-orange-500 text-white shadow-lg shadow-orange-900/20' : 'hover:bg-zinc-900 text-slate-400'
                     }`}

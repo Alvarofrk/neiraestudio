@@ -301,6 +301,13 @@ class CaseTagSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 
+class CaseTagMinimalSerializer(serializers.ModelSerializer):
+    """Solo id, nombre y color para listado de expedientes (menos payload)."""
+    class Meta:
+        model = CaseTag
+        fields = ['id', 'nombre', 'color']
+
+
 class ActuacionTemplateSerializer(serializers.ModelSerializer):
     """Serializer para plantillas de actuaciones"""
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
@@ -383,7 +390,7 @@ class LawCaseListSerializer(serializers.ModelSerializer):
     last_modified_by_username = serializers.SerializerMethodField()
     cliente_nombre_display = serializers.SerializerMethodField()
     abogados_asignados = AbogadoMinimalSerializer(many=True, read_only=True)
-    etiquetas = CaseTagSerializer(many=True, read_only=True)
+    etiquetas = CaseTagMinimalSerializer(many=True, read_only=True)
     
     class Meta:
         model = LawCase

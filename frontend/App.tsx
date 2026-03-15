@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
 import CaseList from './components/CaseList';
-import CaseForm from './components/CaseForm';
-import CaseDetail from './components/CaseDetail';
-import UserManagement from './components/UserManagement';
 import Login from './components/Login';
 import Toast from './components/Toast';
-import Calendar from './components/Calendar';
+
+const CaseForm = lazy(() => import('./components/CaseForm'));
+const CaseDetail = lazy(() => import('./components/CaseDetail'));
+const UserManagement = lazy(() => import('./components/UserManagement'));
+const Calendar = lazy(() => import('./components/Calendar'));
 import { LawCase, ViewState, User, ActuacionTemplate, CaseTag, Cliente, DashboardStats, CalendarEvent } from './types';
 import * as api from './services/apiService';
 
@@ -31,18 +32,84 @@ const App: React.FC = () => {
   const [dashboardStatsCache, setDashboardStatsCache] = useState<DashboardStats | null>(null);
   const [calendarEventsCache, setCalendarEventsCache] = useState<Record<string, CalendarEvent[]>>({});
   const [caseDetailCache, setCaseDetailCache] = useState<Record<string, LawCase>>({});
+  const [usersCache, setUsersCache] = useState<User[] | null>(null);
+  /** Cache de páginas de expedientes (clave estable = filtros + página) para cambiar de página al instante. */
+  const [casesPageCache, setCasesPageCache] = useState<Record<string, { results: LawCase[]; count: number | null }>>({});
+  const MAX_CASES_CACHE_ENTRIES = 15;
+  /** Deduplicar peticiones: si el usuario hace clic en "Siguiente" mientras el preload sigue en curso, reutilizamos esa petición. */
+  const casesFetchInFlightRef = useRef<Record<string, Promise<{ results: LawCase[]; count: number | null; clientes?: Cliente[] }>>>({});
+
+  const buildCasesCacheKey = useCallback((filters: api.CasesListFilters | undefined, page: number): string => {
+    const parts: string[] = [`p${page}`];
+    if (filters && Object.keys(filters).length > 0) {
+      const sorted = Object.keys(filters).sort();
+      for (const k of sorted) parts.push(`${k}=${String((filters as Record<string, unknown>)[k])}`);
+    }
+    return parts.join('_');
+  }, []);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
   };
 
-  const loadCases = useCallback(async (filters?: api.CasesListFilters, page: number = 1) => {
+  const writePageToCache = useCallback((key: string, results: LawCase[], count: number | null) => {
+    setCasesPageCache((prev) => {
+      const next = { ...prev, [key]: { results, count } };
+      const keys = Object.keys(next);
+      if (keys.length <= MAX_CASES_CACHE_ENTRIES) return next;
+      const toRemove = keys.slice(0, keys.length - MAX_CASES_CACHE_ENTRIES);
+      const out = { ...next };
+      toRemove.forEach((k) => delete out[k]);
+      return out;
+    });
+  }, []);
+
+  const loadCases = useCallback(async (filters?: api.CasesListFilters, page: number = 1, options?: { silent?: boolean }) => {
+    const key = buildCasesCacheKey(filters, page);
+    const silent = options?.silent === true;
+
+    const getOrCreateFetch = (): Promise<{ results: LawCase[]; count: number; clientes?: Cliente[] }> => {
+      if (casesFetchInFlightRef.current[key]) return casesFetchInFlightRef.current[key];
+      const p = api
+        .apiGetCases(filters, page)
+        .then((data) => ({
+          results: data.results ?? [],
+          count: data.count ?? null,
+          clientes: data.clientes,
+        }));
+      casesFetchInFlightRef.current[key] = p;
+      p.finally(() => {
+        delete casesFetchInFlightRef.current[key];
+      });
+      return p;
+    };
+
+    if (silent) {
+      if (casesPageCache[key]) return;
+      try {
+        const data = await getOrCreateFetch();
+        writePageToCache(key, data.results, data.count);
+      } catch {
+        // Preload en segundo plano: no mostrar error
+      }
+      return;
+    }
+
+    const cached = casesPageCache[key];
+    if (cached) {
+      setCases(cached.results);
+      if (typeof cached.count === 'number') setCasesCount(cached.count);
+      setCasesPage(page);
+      return;
+    }
+
     try {
-      const data = await api.apiGetCases(filters, page);
-      setCases(data.results ?? []);
-      setCasesCount(data.count ?? 0);
+      const data = await getOrCreateFetch();
+      setCases(data.results);
+      if (typeof data.count === 'number') setCasesCount(data.count);
       setCasesPage(page);
       if (data.clientes && data.clientes.length > 0) setClientes(data.clientes);
+      writePageToCache(key, data.results, data.count);
     } catch (error: any) {
       console.error('Error al cargar casos:', error);
       setCases([]);
@@ -50,7 +117,7 @@ const App: React.FC = () => {
       setCasesPage(1);
       showToast(error?.message || 'No se pudieron cargar los expedientes', 'error');
     }
-  }, []);
+  }, [buildCasesCacheKey, casesPageCache, writePageToCache]);
 
   useEffect(() => {
     const initUser = async () => {
@@ -111,6 +178,9 @@ const App: React.FC = () => {
     setDashboardStatsCache(null);
     setCalendarEventsCache({});
     setCaseDetailCache({});
+    setCasesPageCache({});
+    casesFetchInFlightRef.current = {};
+    setUsersCache(null);
   };
 
   const preloadDashboardInProgress = useRef(false);
@@ -179,6 +249,18 @@ const App: React.FC = () => {
 
   const preloadCaseDetailIds = useRef<Set<string>>(new Set());
 
+  const preloadUsersInProgress = useRef(false);
+  const safePreloadUsers = useCallback(() => {
+    if (usersCache) return;
+    if (preloadUsersInProgress.current) return;
+    preloadUsersInProgress.current = true;
+    api
+      .apiGetUsers()
+      .then((list) => setUsersCache(Array.isArray(list) ? list : []))
+      .catch(() => {})
+      .finally(() => { preloadUsersInProgress.current = false; });
+  }, [usersCache]);
+
   const safePreloadCaseDetail = useCallback((caseItem: LawCase) => {
     const id = String(caseItem.id);
     if (caseDetailCache[id]) return;
@@ -196,6 +278,8 @@ const App: React.FC = () => {
   const handleAddCase = async (newCaseData: Omit<LawCase, 'id' | 'codigo_interno' | 'updatedAt' | 'actuaciones' | 'alertas' | 'notas' | 'createdBy' | 'lastModifiedBy' | 'created_at' | 'updated_at'>) => {
     try {
       await api.apiCreateCase(newCaseData);
+      setCasesPageCache({});
+      casesFetchInFlightRef.current = {};
       await loadCases();
       setCurrentView('cases');
       showToast('Expediente creado exitosamente', 'success');
@@ -211,6 +295,8 @@ const App: React.FC = () => {
       setSelectedCase(updatedCase);
     }
     setCaseDetailCache(prev => ({ ...prev, [String(updatedCase.id)]: updatedCase }));
+    setCasesPageCache({});
+    casesFetchInFlightRef.current = {};
     showToast('Expediente actualizado exitosamente', 'success');
   };
 
@@ -220,6 +306,8 @@ const App: React.FC = () => {
     }
     try {
       await api.apiDeleteCase(String(id));
+      setCasesPageCache({});
+      casesFetchInFlightRef.current = {};
       setCases(prev => prev.filter(c => String(c.id) !== String(id)));
       setCasesCount(prev => Math.max(0, prev - 1));
       setCurrentView('cases');
@@ -313,7 +401,7 @@ const App: React.FC = () => {
           />
         );
       case 'users':
-        return <UserManagement currentUser={currentUser} />;
+        return <UserManagement currentUser={currentUser} initialUsers={usersCache ?? undefined} onUsersLoaded={setUsersCache} />;
       case 'calendar':
         return (
           <Calendar
@@ -332,6 +420,7 @@ const App: React.FC = () => {
             onUpdateCase={handleUpdateCase}
             initialStats={dashboardStatsCache}
             onStatsLoaded={setDashboardStatsCache}
+            currentUser={currentUser}
           />
         );
     }
@@ -354,8 +443,15 @@ const App: React.FC = () => {
         onPreloadCases={cases.length === 0 ? safePreloadCases : undefined}
         onPreloadDashboard={!dashboardStatsCache ? safePreloadDashboard : undefined}
         onPreloadCalendar={currentUser ? safePreloadCalendar : undefined}
+        onPreloadUsers={currentUser?.is_admin ? safePreloadUsers : undefined}
       >
-        {renderView()}
+        <Suspense fallback={
+          <div className="flex-1 flex items-center justify-center min-h-[280px]">
+            <span className="animate-spin rounded-full h-10 w-10 border-2 border-orange-500 border-t-transparent" aria-hidden />
+          </div>
+        }>
+          {renderView()}
+        </Suspense>
       </Layout>
     </>
   );
